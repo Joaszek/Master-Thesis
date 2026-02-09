@@ -32,7 +32,7 @@ NC='\033[0m' # No Color
 # Configuration
 GITHUB_REPO="https://github.com/Joaszek/Master-Thesis.git"
 PROJECT_ROOT="/ephemeral/elliptic2"
-DATA_RAW="${PROJECT_ROOT}/data/raw"
+DATA_RAW="${PROJECT_ROOT}/dataset/archive"
 DATA_PROCESSED="${PROJECT_ROOT}/data/processed"
 CHECKPOINTS="${PROJECT_ROOT}/checkpoints"
 RESULTS="${PROJECT_ROOT}/results"
