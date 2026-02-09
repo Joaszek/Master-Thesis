@@ -13,6 +13,7 @@ import tempfile
 import torch
 import torch.nn as nn
 import numpy as np
+from torch.utils.data import WeightedRandomSampler
 from torch_geometric.loader import DataLoader
 from sklearn.metrics import classification_report, f1_score, accuracy_score
 from tqdm import tqdm
@@ -27,16 +28,16 @@ def sigterm_handler(signum, frame):
     global _SIGTERM_RECEIVED
     _SIGTERM_RECEIVED = True
     print("\n" + "=" * 60)
-    print("⚡ SIGTERM received — spot instance is shutting down!")
+    print("SIGTERM received — spot instance is shutting down!")
     print("   Saving checkpoint before exit...")
     print("=" * 60)
 
     if _GLOBAL_SAVE_STATE:
         try:
             atomic_save(_GLOBAL_SAVE_STATE["state"], _GLOBAL_SAVE_STATE["path"])
-            print(f"   ✅ Checkpoint saved to {_GLOBAL_SAVE_STATE['path']}")
+            print(f"   Checkpoint saved to {_GLOBAL_SAVE_STATE['path']}")
         except Exception as e:
-            print(f"   ❌ Failed to save checkpoint: {e}")
+            print(f"   Failed to save checkpoint: {e}")
 
     print("   Exiting gracefully.")
     sys.exit(0)
@@ -73,7 +74,7 @@ def cleanup_tmp_files(dirpath):
     for f in os.listdir(dirpath):
         if f.endswith(".tmp"):
             os.remove(os.path.join(dirpath, f))
-            print(f"  🧹 Cleaned up leftover: {f}")
+            print(f"  Cleaned up leftover: {f}")
 
 def resolve_paths(config):
     """
@@ -104,13 +105,43 @@ def load_config():
     with open("config.yaml") as f:
         return yaml.safe_load(f)
 
+
+def compute_class_weights(dataset, num_classes, device):
+    """Oblicza inverse-frequency wagi klas z training set."""
+    labels = dataset.get_labels()
+    class_counts = np.bincount(labels, minlength=num_classes).astype(np.float64)
+    total = len(labels)
+
+    # Inverse frequency: w_i = total / (num_classes * count_i)
+    weights = total / (num_classes * class_counts)
+    weights_tensor = torch.tensor(weights, dtype=torch.float32).to(device)
+
+    print(f"    Class counts: {dict(enumerate(class_counts.astype(int)))}")
+    print(f"    Class weights: {dict(enumerate(weights.round(2)))}")
+    return weights_tensor
+
+
+def make_weighted_sampler(dataset):
+    """Buduje WeightedRandomSampler — oversampling klasy mniejszościowej."""
+    labels = dataset.get_labels()
+    class_counts = np.bincount(labels)
+
+    # Waga per-sample = 1 / count klasy danej próbki
+    sample_weights = [1.0 / class_counts[l] for l in labels]
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(labels),
+        replacement=True,
+    )
+    return sampler
+
+
 @torch.no_grad()
-def evaluate(model, loader, device):
+def evaluate(model, loader, criterion, device):
     """Evaluate model na validation/test set."""
     model.eval()
     all_preds, all_labels = [], []
     total_loss, n_batches = 0.0, 0
-    criterion = nn.CrossEntropyLoss()
 
     for batch in loader:
         batch = batch.to(device)
@@ -123,18 +154,19 @@ def evaluate(model, loader, device):
 
     avg_loss = total_loss / max(n_batches, 1)
     acc = accuracy_score(all_labels, all_preds)
-    f1 = f1_score(all_labels, all_preds, average="weighted", zero_division=0)
-    return avg_loss, acc, f1, np.array(all_preds), np.array(all_labels)
+    f1_macro = f1_score(all_labels, all_preds, average="macro", zero_division=0)
+    f1_weighted = f1_score(all_labels, all_preds, average="weighted", zero_division=0)
+    return avg_loss, acc, f1_macro, f1_weighted, np.array(all_preds), np.array(all_labels)
 
 
-def build_save_state(epoch, model, optimizer, scheduler, best_val_loss, history):
+def build_save_state(epoch, model, optimizer, scheduler, best_val_f1, history):
     """Buduje dict do checkpoint."""
     return {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict(),
-        "best_val_loss": best_val_loss,
+        "best_val_f1": best_val_f1,
         "history": history,
     }
 
@@ -149,6 +181,7 @@ def main():
     config = load_config()
     device = torch.device(config.get("device", "cuda") if torch.cuda.is_available() else "cpu")
     spot_mode = config.get("spot_mode", False)
+    train_cfg = config["training"]
 
     print(f"\nDevice: {device}")
     if device.type == "cuda":
@@ -181,23 +214,40 @@ def main():
 
     # --- Load datasets ---
     print("\nLoading datasets...")
-    val_ratio = config["training"]["val_ratio"]
-    test_ratio = config["training"]["test_ratio"]
+    val_ratio = train_cfg["val_ratio"]
+    test_ratio = train_cfg["test_ratio"]
 
     train_dataset = Elliptic2Dataset(processed_dir, split="train", val_ratio=val_ratio, test_ratio=test_ratio)
     val_dataset   = Elliptic2Dataset(processed_dir, split="val",   val_ratio=val_ratio, test_ratio=test_ratio)
     test_dataset  = Elliptic2Dataset(processed_dir, split="test",  val_ratio=val_ratio, test_ratio=test_ratio)
 
-    batch_size = config["training"]["batch_size"]
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,  num_workers=4, pin_memory=True)
-    val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-    test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    batch_size = train_cfg["batch_size"]
+
+    # --- Oversampling (WeightedRandomSampler) ---
+    use_oversampling = train_cfg.get("oversampling", True)
+    if use_oversampling:
+        print("\n  Oversampling ON (WeightedRandomSampler)")
+        sampler = make_weighted_sampler(train_dataset)
+        train_loader = DataLoader(
+            train_dataset, batch_size=batch_size, sampler=sampler,
+            num_workers=4, pin_memory=True
+        )
+    else:
+        print("\n  Oversampling OFF (standard shuffle)")
+        train_loader = DataLoader(
+            train_dataset, batch_size=batch_size, shuffle=True,
+            num_workers=4, pin_memory=True
+        )
+
+    val_loader  = DataLoader(val_dataset,  batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     print(f"    Train: {len(train_dataset):,} | Val: {len(val_dataset):,} | Test: {len(test_dataset):,}")
     print(f"    Batch size: {batch_size} | Batches/epoch: {len(train_loader)}")
 
     # --- Model ---
     print("\nInitializing model...")
+    num_classes = config["model"]["num_classes"]
     model = EllipticGNN(
         node_feat_dim=node_feat_dim,
         edge_feat_dim=edge_feat_dim,
@@ -205,32 +255,44 @@ def main():
         num_layers=config["model"]["num_layers"],
         heads=config["model"]["heads"],
         edge_proj_dim=config["model"]["edge_proj_dim"],
-        num_classes=config["model"]["num_classes"],
+        num_classes=num_classes,
         dropout=config["model"]["dropout"],
     ).to(device)
     print(f"    Parameters: {model.count_params():,}")
 
+    # --- Class-weighted loss ---
+    use_class_weights = train_cfg.get("class_weighting", True)
+    if use_class_weights:
+        print("\n  Class weighting ON:")
+        class_weights = compute_class_weights(train_dataset, num_classes, device)
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+    else:
+        print("\n  Class weighting OFF (uniform loss)")
+        criterion = nn.CrossEntropyLoss()
+
     # --- Optimizer & Scheduler ---
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=config["training"]["learning_rate"],
-        weight_decay=config["training"]["weight_decay"],
+        lr=train_cfg["learning_rate"],
+        weight_decay=train_cfg["weight_decay"],
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min",
-        patience=config["training"]["lr_patience"],
-        factor=config["training"]["lr_factor"],
+        optimizer, mode="max",  # max because we track F1 (higher = better)
+        patience=train_cfg["lr_patience"],
+        factor=train_cfg["lr_factor"],
     )
-    criterion = nn.CrossEntropyLoss()
 
     # --- Resume / Fresh logic ---
     last_ckpt_path = os.path.join(checkpoint_dir, "last_checkpoint.pt")
     best_ckpt_path = os.path.join(checkpoint_dir, "best_model.pt")
 
     start_epoch = 0
-    best_val_loss = float("inf")
+    best_val_f1 = 0.0
     patience_counter = 0
-    history = {"train_loss": [], "val_loss": [], "val_acc": [], "val_f1": []}
+    history = {
+        "train_loss": [], "val_loss": [],
+        "val_acc": [], "val_f1_macro": [], "val_f1_weighted": [],
+    }
 
     if args.fresh:
         print("\n--fresh: removing existing checkpoints...")
@@ -238,6 +300,11 @@ def main():
             if os.path.exists(p):
                 os.remove(p)
                 print(f"    removed {p}")
+        # Wyczyść graph cache — wymusza przebudowanie przy zmianie danych
+        cache_path = os.path.join(processed_dir, "all_graphs.pt")
+        if os.path.exists(cache_path):
+            os.remove(cache_path)
+            print(f"    removed {cache_path}")
     else:
         if os.path.exists(last_ckpt_path):
             print(f"\nAuto-resume: checkpoint found at {last_ckpt_path}")
@@ -246,28 +313,29 @@ def main():
             optimizer.load_state_dict(state["optimizer_state_dict"])
             scheduler.load_state_dict(state["scheduler_state_dict"])
             start_epoch     = state["epoch"] + 1
-            best_val_loss   = state.get("best_val_loss", float("inf"))
+            best_val_f1     = state.get("best_val_f1", state.get("best_val_loss", 0.0))
             history         = state.get("history", history)
             patience_counter = state.get("patience_counter", 0)
-            print(f"    Resuming from epoch {start_epoch} | best_val_loss: {best_val_loss:.4f}")
+            print(f"    Resuming from epoch {start_epoch} | best_val_f1_macro: {best_val_f1:.4f}")
             print(f"    history length: {len(history['train_loss'])} epochs recorded")
         else:
             print("\nNo checkpoint found — starting fresh.")
 
     # --- Training loop ---
-    epochs = config["training"]["epochs"]
-    early_stop_patience = config["training"]["early_stop_patience"]
-    save_every = config["training"]["save_every"]
+    epochs = train_cfg["epochs"]
+    early_stop_patience = train_cfg["early_stop_patience"]
+    save_every = train_cfg["save_every"]
 
     if start_epoch >= epochs:
         print(f"\nAlready at epoch {start_epoch} >= {epochs}. Nothing to train.")
         print("    Use --fresh to restart, or increase epochs in config.yaml")
         sys.exit(0)
 
-    print(f"\nTraining epochs {start_epoch+1} → {epochs}")
-    print("=" * 78)
-    print(f"{'Epoch':>6} | {'Train Loss':>10} | {'Val Loss':>9} | {'Val Acc':>8} | {'Val F1':>7} | {'LR':>10}")
-    print("-" * 78)
+    print(f"\nTraining epochs {start_epoch+1} -> {epochs}")
+    print("=" * 100)
+    print(f"{'Epoch':>6} | {'Train Loss':>10} | {'Val Loss':>9} | "
+          f"{'Val Acc':>8} | {'F1 macro':>8} | {'F1 wght':>7} | {'LR':>10}")
+    print("-" * 100)
 
     training_start = time.time()
     final_epoch = 0
@@ -276,7 +344,7 @@ def main():
         final_epoch = epoch
         # PRE-EPOCH: update global state so SIGTERM handler can save
         _GLOBAL_SAVE_STATE = {
-            "state": build_save_state(epoch - 1 if epoch > 0 else 0, model, optimizer, scheduler, best_val_loss, history),
+            "state": build_save_state(epoch - 1 if epoch > 0 else 0, model, optimizer, scheduler, best_val_f1, history),
             "path": last_ckpt_path,
         }
 
@@ -306,31 +374,34 @@ def main():
         avg_train_loss = train_loss_sum / max(n_batches, 1)
 
         # --- VALIDATE ---
-        val_loss, val_acc, val_f1, _, _ = evaluate(model, val_loader, device)
-        scheduler.step(val_loss)
+        val_loss, val_acc, val_f1_macro, val_f1_weighted, _, _ = evaluate(
+            model, val_loader, criterion, device
+        )
+        scheduler.step(val_f1_macro)
 
         # --- LOG ---
         current_lr = optimizer.param_groups[0]["lr"]
         history["train_loss"].append(avg_train_loss)
         history["val_loss"].append(val_loss)
         history["val_acc"].append(val_acc)
-        history["val_f1"].append(val_f1)
+        history["val_f1_macro"].append(val_f1_macro)
+        history["val_f1_weighted"].append(val_f1_weighted)
 
         print(f"{epoch+1:>6} | {avg_train_loss:>10.4f} | {val_loss:>9.4f} | "
-              f"{val_acc:>7.2%} | {val_f1:>6.4f} | {current_lr:>10.6f}")
+              f"{val_acc:>7.2%} | {val_f1_macro:>8.4f} | {val_f1_weighted:>7.4f} | {current_lr:>10.6f}")
 
-        # --- BEST MODEL ---
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        # --- BEST MODEL (based on macro F1) ---
+        if val_f1_macro > best_val_f1:
+            best_val_f1 = val_f1_macro
             patience_counter = 0
             atomic_save(model.state_dict(), best_ckpt_path)
-            print(f"New best val_loss: {val_loss:.4f} — saved best_model.pt")
+            print(f"  >> New best F1_macro: {val_f1_macro:.4f} — saved best_model.pt")
         else:
             patience_counter += 1
 
         # --- POST-EPOCH CHECKPOINT (atomic) ---
         if (epoch + 1) % save_every == 0:
-            state = build_save_state(epoch, model, optimizer, scheduler, best_val_loss, history)
+            state = build_save_state(epoch, model, optimizer, scheduler, best_val_f1, history)
             state["patience_counter"] = patience_counter
             atomic_save(state, last_ckpt_path)
 
@@ -342,12 +413,12 @@ def main():
             break
 
     # POST-TRAINING
-    state = build_save_state(final_epoch, model, optimizer, scheduler, best_val_loss, history)
+    state = build_save_state(final_epoch, model, optimizer, scheduler, best_val_f1, history)
     state["patience_counter"] = patience_counter
     atomic_save(state, last_ckpt_path)
 
     total_time = time.time() - training_start
-    print("=" * 78)
+    print("=" * 100)
     print(f"Training done in {total_time/60:.1f} min | epochs completed: {final_epoch+1}/{epochs}")
 
     # --- Save history ---
@@ -359,12 +430,14 @@ def main():
     if os.path.exists(best_ckpt_path):
         print("\nFinal TEST evaluation (best model):")
         model.load_state_dict(torch.load(best_ckpt_path, map_location=device))
-        test_loss, test_acc, test_f1, test_preds, test_labels = evaluate(model, test_loader, device)
+        test_loss, test_acc, test_f1_macro, test_f1_weighted, test_preds, test_labels = evaluate(
+            model, test_loader, criterion, device
+        )
 
-        num_classes = config["model"]["num_classes"]
         target_names = ["Licit", "Suspicious", "Illicit"] if num_classes == 3 else ["Legitimate", "Illicit"]
         print(classification_report(test_labels, test_preds, target_names=target_names, labels=list(range(num_classes))))
-        print(f"Test Loss: {test_loss:.4f} | Accuracy: {test_acc:.2%} | F1: {test_f1:.4f}")
+        print(f"Test Loss: {test_loss:.4f} | Accuracy: {test_acc:.2%} | "
+              f"F1_macro: {test_f1_macro:.4f} | F1_weighted: {test_f1_weighted:.4f}")
     else:
         print("\nNo best_model.pt found — skipping test eval")
 

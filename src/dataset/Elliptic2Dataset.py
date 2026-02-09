@@ -4,6 +4,9 @@ dataset.py — Elliptic2 PyTorch Geometric Dataset
 Wczyta preprocessed parquet files i buduje listę PyG Data objectów —
 jeden per subgraf. Każdy subgraf to oddzielny mały graf (~3-4 nody).
 
+Używa stratified split aby zachować proporcje klas w train/val/test.
+Cachuje zbudowane grafy do .pt pliku (eliminuje powtórne ładowanie).
+
 Jeśli preprocessing nie został uruchomiony, dostaniesz error.
 Uruchomij najpierw: python preprocess.py
 """
@@ -15,6 +18,7 @@ import numpy as np
 import polars as pl
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
+from sklearn.model_selection import train_test_split
 
 
 class Elliptic2Dataset(Dataset):
@@ -26,35 +30,65 @@ class Elliptic2Dataset(Dataset):
       - edge_index: krawędzie [2, num_edges]
       - edge_attr:  edge features [num_edges, edge_feat_dim]
       - y:          label subgrafu [1]  (binary: 0=legit, 1=illicit)
+
+    Dane budowane raz i cachowane w all_graphs.pt.
+    Split stratyfikowany — proporcje klas zachowane w każdym splicie.
     """
 
+    _cache = {}  # class-level cache: processed_dir -> data_list
+
     def __init__(self, processed_dir, split="train", val_ratio=0.15, test_ratio=0.10):
-        """
-        Args:
-            processed_dir: path do folderu z parquet files (data/processed/)
-            split:         "train", "val", lub "test"
-            val_ratio:     procent danych do validation
-            test_ratio:    procent danych do testu
-        """
         self.processed_dir = processed_dir
         self.split = split
         self.val_ratio = val_ratio
         self.test_ratio = test_ratio
 
-        # Load data
-        data_list = self._load_and_build()
+        # Load (z cache lub z dysku)
+        all_data = self._get_all_data()
 
-        # Split
-        self.data_list = self._get_split(data_list)
+        # Stratified split
+        self.data_list = self._stratified_split(all_data)
 
         # Report
-        print(f"  [{split.upper()}] Loaded {len(self.data_list)} subgraphs")
+        labels = [d.y.item() for d in self.data_list]
+        counts = np.bincount(labels, minlength=2)
+        print(f"  [{split.upper()}] {len(self.data_list)} subgraphs "
+              f"(class 0: {counts[0]}, class 1: {counts[1]})")
 
     def __len__(self):
         return len(self.data_list)
 
     def __getitem__(self, idx):
         return self.data_list[idx]
+
+    def get_labels(self):
+        """Zwraca listę labeli — potrzebne do WeightedRandomSampler."""
+        return [d.y.item() for d in self.data_list]
+
+    def _get_all_data(self):
+        """Load all graphs — z class cache, .pt pliku, lub buduje od zera."""
+        # 1. Class-level RAM cache (dla kolejnych splitów w tym samym procesie)
+        if self.processed_dir in Elliptic2Dataset._cache:
+            return Elliptic2Dataset._cache[self.processed_dir]
+
+        # 2. Disk cache (.pt plik)
+        cache_path = os.path.join(self.processed_dir, "all_graphs.pt")
+        if os.path.exists(cache_path):
+            print("  Loading cached graphs from all_graphs.pt...")
+            data_list = torch.load(cache_path, weights_only=False)
+            print(f"  Loaded {len(data_list)} graphs from cache")
+            Elliptic2Dataset._cache[self.processed_dir] = data_list
+            return data_list
+
+        # 3. Build from parquets
+        data_list = self._load_and_build()
+
+        # Save cache
+        print(f"  Saving graph cache to {cache_path}...")
+        torch.save(data_list, cache_path)
+
+        Elliptic2Dataset._cache[self.processed_dir] = data_list
+        return data_list
 
     def _load_and_build(self):
         """Load parquet files i buduje Data objecty."""
@@ -101,7 +135,7 @@ class Elliptic2Dataset(Dataset):
         # subgraph_id -> label (as int)
         subgraph_labels = dict(zip(
             components_df["subgraph_id"].to_list(),
-            [int(x) for x in components_df["label"].to_list()]  # force int conversion
+            [int(x) for x in components_df["label"].to_list()]
         ))
 
         # subgraph_id -> list of node_ids
@@ -180,38 +214,47 @@ class Elliptic2Dataset(Dataset):
             data_list.append(data)
 
         if skipped > 0:
-            print(f"    ⚠️  Skipped {skipped} subgraphs (no nodes found)")
+            print(f"    Skipped {skipped} subgraphs (no nodes found)")
 
         print(f"    Built {len(data_list)} Data objects")
 
         # Quick stats
         sizes = [d.num_nodes for d in data_list]
+        labels = [d.y.item() for d in data_list]
+        counts = np.bincount(labels, minlength=2)
         print(f"    Avg nodes/subgraph: {np.mean(sizes):.2f} | Max: {max(sizes)} | Min: {min(sizes)}")
+        print(f"    Label distribution: class 0={counts[0]:,}, class 1={counts[1]:,} "
+              f"(ratio {counts[0]/max(counts[1],1):.1f}:1)")
 
         return data_list
 
-    def _get_split(self, data_list):
+    def _stratified_split(self, data_list):
         """
-        Split data na train/val/test deterministycznie.
-        Shuffle z fixed seed aby split był reproducible.
+        Stratified split zachowujący proporcje klas w train/val/test.
+        Deterministyczny (seed=42).
         """
-        n = len(data_list)
-        indices = list(range(n))
+        labels = np.array([d.y.item() for d in data_list])
+        indices = np.arange(len(data_list))
 
-        # Deterministyczny shuffle
-        rng = np.random.RandomState(42)
-        rng.shuffle(indices)
+        # Najpierw oddziel test
+        train_val_idx, test_idx = train_test_split(
+            indices, test_size=self.test_ratio,
+            stratify=labels, random_state=42
+        )
 
-        n_test = int(n * self.test_ratio)
-        n_val = int(n * self.val_ratio)
-        n_train = n - n_val - n_test
+        # Potem z train_val oddziel val
+        val_ratio_adjusted = self.val_ratio / (1.0 - self.test_ratio)
+        train_idx, val_idx = train_test_split(
+            train_val_idx, test_size=val_ratio_adjusted,
+            stratify=labels[train_val_idx], random_state=42
+        )
 
         if self.split == "train":
-            selected = indices[:n_train]
+            selected = train_idx
         elif self.split == "val":
-            selected = indices[n_train:n_train + n_val]
+            selected = val_idx
         elif self.split == "test":
-            selected = indices[n_train + n_val:]
+            selected = test_idx
         else:
             raise ValueError(f"Unknown split: {self.split}")
 
