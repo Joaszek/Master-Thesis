@@ -1,0 +1,31 @@
+# ============================================================
+# Elliptic2 GNN — Requirements
+# ============================================================
+# Install: pip install -r requirements.txt
+#
+# IMPORTANT: PyTorch + CUDA jest już pre-installed na Prime Intellect
+# w PyTorch template. Jeśli jest jakiś problem:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# ============================================================
+
+# Core
+polars>=0.20.0          # Fast data loading (Polars, nie pandas — dla 77GB pliku)
+pyyaml>=6.0             # Config loading
+numpy>=1.24
+
+# PyTorch Geometric
+torch-geometric>=2.5.0  # GNN framework
+
+# Jeśli torch-geometric install się nie powiedzie, spróbuj:
+# pip install torch-scatter torch-sparse torch-cluster torch-spline-conv \
+#   -f https://data.pytorch.org/whl/cu121/torch_geometric/
+
+# Logging & monitoring
+tqdm>=4.66              # Progress bars
+tensorboard>=2.15       # Training curves visualization
+# Opcjonalnie — jeśli masz konto na wandb:
+# wandb>=0.16
+
+# Evaluation & Plotting
+scikit-learn>=1.3       # Metrics (F1, confusion matrix, etc.)
+matplotlib>=3.7         # Plot training curves (python plot_history.py)

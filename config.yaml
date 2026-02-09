@@ -1,0 +1,52 @@
+spot_mode: false
+persistent_storage_path: "/persistent"
+
+data:
+  raw_dir: "dataset/archive"
+  processed_dir: "data/processed"
+  checkpoints: "data/checkpoints"
+  results: "data/results"
+  sample_ratio: 1
+
+  columns:
+    nodes:
+      node_id: "clId"
+      subgraph_id: "ccId"
+    edges:
+      source: "clId1"
+      target: "clId2"
+      txId: "txId"
+    components:
+      subgraph_id: "ccId"
+      label: "ccLabel"
+    background_nodes:
+      node_id: "clId"
+    background_edges:
+      txId: "txId"
+      source: "clId1"
+      target: "clId2"
+
+model:
+  hidden_dim: 128
+  num_layers: 3
+  heads: 4
+  edge_proj_dim: 32
+  dropout: 0.3
+  num_classes: 3
+
+training:
+  epochs: 100
+  batch_size: 256
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  lr_patience: 10
+  lr_factor: 0.5
+  early_stop_patience: 20
+
+  val_ratio: 0.15
+  test_ratio: 0.10
+
+  checkpoint_dir: "checkpoints"
+  save_every: 1
+
+device: "cuda"
