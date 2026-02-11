@@ -2,7 +2,7 @@ spot_mode: false
 persistent_storage_path: "/persistent"
 
 data:
-  raw_dir: "dataset/archive"
+  raw_dir: "data/raw"
   processed_dir: "data/processed"
   checkpoints: "data/checkpoints"
   results: "data/results"
