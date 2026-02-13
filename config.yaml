@@ -42,9 +42,13 @@ training:
   lr_patience: 10
   lr_factor: 0.5
   early_stop_patience: 30
+  cost_matrix:
+    fn_cost: 10.0
+    fp_cost: 1.0
 
   class_weighting: true
   oversampling: true
+  balanced_sampling: true  # Use BalancedBatchSampler instead of WeightedRandomSampler
 
   val_ratio: 0.15
   test_ratio: 0.10

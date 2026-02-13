@@ -13,13 +13,19 @@ import tempfile
 import torch
 import torch.nn as nn
 import numpy as np
-from torch.utils.data import WeightedRandomSampler
+from torch.utils.data import WeightedRandomSampler, Sampler
 from torch_geometric.loader import DataLoader
-from sklearn.metrics import classification_report, f1_score, accuracy_score
+from sklearn.metrics import (
+    classification_report, f1_score, accuracy_score,
+    confusion_matrix, roc_auc_score, average_precision_score,
+    precision_score, recall_score
+)
 from tqdm import tqdm
 
 from src.dataset.Elliptic2Dataset import Elliptic2Dataset
 from src.models.model import EllipticGNN
+from src.models.losses import FocalLoss
+
 
 _GLOBAL_SAVE_STATE = {}
 _SIGTERM_RECEIVED = False
@@ -119,6 +125,224 @@ def compute_class_weights(dataset, num_classes, device):
     print(f"    Class counts: {dict(enumerate(class_counts.astype(int)))}")
     print(f"    Class weights: {dict(enumerate(weights.round(2)))}")
     return weights_tensor
+
+def print_comprehensive_metrics(y_true, y_pred, y_probs, target_names=None):
+    """
+    Print comprehensive evaluation metrics.
+
+    Args:
+        y_true: True labels
+        y_pred: Predicted labels
+        y_probs: Predicted probabilities for positive class
+        target_names: Class names for display
+    """
+    print("\n" + "=" * 80)
+    print("COMPREHENSIVE EVALUATION METRICS")
+    print("=" * 80)
+
+    # Confusion Matrix
+    cm = confusion_matrix(y_true, y_pred)
+    print("\nConfusion Matrix:")
+    print(f"                 Predicted")
+    print(f"                 Neg    Pos")
+    print(f"  Actual  Neg  [{cm[0,0]:6d}  {cm[0,1]:6d}]")
+    print(f"          Pos  [{cm[1,0]:6d}  {cm[1,1]:6d}]")
+
+    tn, fp, fn, tp = cm.ravel()
+    print(f"\n  True Negatives:  {tn:6d}")
+    print(f"  False Positives: {fp:6d}")
+    print(f"  False Negatives: {fn:6d}")
+    print(f"  True Positives:  {tp:6d}")
+
+    # Per-class metrics
+    print("\nPer-Class Metrics:")
+    precision = precision_score(y_true, y_pred, average=None, zero_division=0)
+    recall = recall_score(y_true, y_pred, average=None, zero_division=0)
+    f1 = f1_score(y_true, y_pred, average=None, zero_division=0)
+
+    if target_names is None:
+        target_names = ["Class 0", "Class 1"]
+
+    for i, name in enumerate(target_names):
+        print(f"  {name:12s}: Precision={precision[i]:.4f}, Recall={recall[i]:.4f}, F1={f1[i]:.4f}")
+
+    # Macro/Weighted averages
+    print("\nAveraged Metrics:")
+    print(f"  Precision (macro):   {precision_score(y_true, y_pred, average='macro', zero_division=0):.4f}")
+    print(f"  Recall (macro):      {recall_score(y_true, y_pred, average='macro', zero_division=0):.4f}")
+    print(f"  F1 (macro):          {f1_score(y_true, y_pred, average='macro', zero_division=0):.4f}")
+    print(f"  F1 (weighted):       {f1_score(y_true, y_pred, average='weighted', zero_division=0):.4f}")
+
+    # ROC-AUC and PR-AUC
+    try:
+        roc_auc = roc_auc_score(y_true, y_probs)
+        pr_auc = average_precision_score(y_true, y_probs)
+        print("\nArea Under Curve Metrics:")
+        print(f"  ROC-AUC:  {roc_auc:.4f}")
+        print(f"  PR-AUC:   {pr_auc:.4f}")
+    except ValueError as e:
+        print(f"\nWarning: Could not compute AUC metrics: {e}")
+
+    # Specificity and Sensitivity
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
+    print("\nAdditional Metrics:")
+    print(f"  Specificity (TNR): {specificity:.4f}")
+    print(f"  Sensitivity (TPR): {sensitivity:.4f}")
+    print(f"  Accuracy:          {accuracy_score(y_true, y_pred):.4f}")
+
+    print("=" * 80 + "\n")
+
+
+def cost_aware_threshold_search(all_probs, all_labels, fn_cost=10.0, fp_cost=1.0):
+    """
+    Optymalizuj threshold minimalizując total cost.
+
+    Args:
+        all_probs: probabilities dla klasy pozytywnej [N]
+        all_labels: true labels [N]
+        fn_cost: Koszt False Negative (miss fraud)
+        fp_cost: Koszt False Positive (false alarm)
+
+    Returns:
+        best_threshold, best_cost, best_f1
+    """
+    thresholds = np.linspace(0.01, 0.99, 99)
+    best_threshold = 0.5
+    best_cost = float('inf')
+    best_f1 = 0.0
+
+    for thresh in thresholds:
+        preds = (all_probs >= thresh).astype(int)
+
+        # Confusion matrix elements
+        tn = np.sum((all_labels == 0) & (preds == 0))
+        fp = np.sum((all_labels == 0) & (preds == 1))
+        fn = np.sum((all_labels == 1) & (preds == 0))
+        tp = np.sum((all_labels == 1) & (preds == 1))
+
+        total_cost = fn * fn_cost + fp * fp_cost
+        f1 = f1_score(all_labels, preds, average='macro', zero_division=0)
+
+        # Optymalizuj po total cost, f1 jako tiebreaker
+        if total_cost < best_cost or (total_cost == best_cost and f1 > best_f1):
+            best_cost = total_cost
+            best_threshold = thresh
+            best_f1 = f1
+
+    return best_threshold, best_cost, best_f1
+
+
+@torch.no_grad()
+def evaluate_with_threshold_search(model, loader, criterion, device, num_classes=2,
+                                   fn_cost=None, fp_cost=None):
+    """
+    Evaluate z optymalizacją threshold dla klasy pozytywnej.
+
+    Args:
+        fn_cost, fp_cost: Jeśli podane, użyj cost-aware threshold, inaczej max F1-macro
+    """
+    model.eval()
+    all_probs, all_labels = [], []
+    total_loss, n_batches = 0.0, 0
+
+    for batch in loader:
+        batch = batch.to(device)
+        logits = model(batch)
+        loss = criterion(logits, batch.y.squeeze())
+        total_loss += loss.item()
+        n_batches += 1
+
+        # Pobierz probability dla klasy 1 (illicit)
+        probs = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
+        all_probs.extend(probs)
+        all_labels.extend(batch.y.squeeze().cpu().numpy())
+
+    all_probs = np.array(all_probs)
+    all_labels = np.array(all_labels)
+
+    # Threshold optimization
+    if fn_cost is not None and fp_cost is not None:
+        # Cost-aware threshold
+        best_threshold, total_cost, best_f1 = cost_aware_threshold_search(
+            all_probs, all_labels, fn_cost, fp_cost
+        )
+    else:
+        # F1-macro optimization
+        thresholds = np.linspace(0.01, 0.99, 99)
+        best_threshold = 0.5
+        best_f1 = 0.0
+
+        for thresh in thresholds:
+            preds = (all_probs >= thresh).astype(int)
+            f1 = f1_score(all_labels, preds, average='macro', zero_division=0)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_threshold = thresh
+
+    # Final predictions z optymalnym threshold
+    preds = (all_probs >= best_threshold).astype(int)
+
+    avg_loss = total_loss / max(n_batches, 1)
+    acc = accuracy_score(all_labels, preds)
+    f1_macro = f1_score(all_labels, preds, average="macro", zero_division=0)
+    f1_weighted = f1_score(all_labels, preds, average="weighted", zero_division=0)
+
+    return avg_loss, acc, f1_macro, f1_weighted, preds, all_labels, best_threshold, all_probs
+
+
+
+class BalancedBatchSampler(Sampler):
+    """
+    Balanced batch sampler — każdy batch ma równą liczbę próbek z każdej klasy.
+    Znacznie bardziej efektywne niż WeightedRandomSampler dla extreme imbalance.
+    """
+    def __init__(self, labels, batch_size, num_batches=None):
+        self.labels = np.array(labels)
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+
+        # Indeksy per klasa
+        self.class_indices = {}
+        for c in np.unique(labels):
+            self.class_indices[c] = np.where(self.labels == c)[0].tolist()
+
+        self.num_classes = len(self.class_indices)
+        self.samples_per_class = batch_size // self.num_classes
+
+        # If num_batches not specified, compute from majority class
+        if self.num_batches is None:
+            max_class_size = max(len(idx) for idx in self.class_indices.values())
+            self.num_batches = max_class_size // self.samples_per_class
+
+    def __iter__(self):
+        # Shuffle indices per class
+        for c in self.class_indices:
+            np.random.shuffle(self.class_indices[c])
+
+        # Pointers per class
+        pointers = {c: 0 for c in self.class_indices}
+
+        for _ in range(self.num_batches):
+            batch = []
+            for c in self.class_indices:
+                indices = self.class_indices[c]
+                n = len(indices)
+
+                # Wrap around if needed (sampling with replacement)
+                selected = []
+                for _ in range(self.samples_per_class):
+                    selected.append(indices[pointers[c] % n])
+                    pointers[c] += 1
+
+                batch.extend(selected)
+
+            # Shuffle batch internally
+            np.random.shuffle(batch)
+            yield batch
+
+    def __len__(self):
+        return self.num_batches
 
 
 def make_weighted_sampler(dataset):
@@ -223,9 +447,21 @@ def main():
 
     batch_size = train_cfg["batch_size"]
 
-    # --- Oversampling (WeightedRandomSampler) ---
+    # --- Sampling strategy ---
+    use_balanced_sampling = train_cfg.get("balanced_sampling", False)
     use_oversampling = train_cfg.get("oversampling", True)
-    if use_oversampling:
+
+    if use_balanced_sampling:
+        print("\n  Balanced Batch Sampling ON (equal class distribution per batch)")
+        batch_sampler = BalancedBatchSampler(
+            labels=train_dataset.get_labels(),
+            batch_size=batch_size
+        )
+        train_loader = DataLoader(
+            train_dataset, batch_sampler=batch_sampler,
+            num_workers=4, pin_memory=True
+        )
+    elif use_oversampling:
         print("\n  Oversampling ON (WeightedRandomSampler)")
         sampler = make_weighted_sampler(train_dataset)
         train_loader = DataLoader(
@@ -233,7 +469,7 @@ def main():
             num_workers=4, pin_memory=True
         )
     else:
-        print("\n  Oversampling OFF (standard shuffle)")
+        print("\n  Standard sampling (shuffle only)")
         train_loader = DataLoader(
             train_dataset, batch_size=batch_size, shuffle=True,
             num_workers=4, pin_memory=True
@@ -261,14 +497,12 @@ def main():
     print(f"    Parameters: {model.count_params():,}")
 
     # --- Class-weighted loss ---
-    use_class_weights = train_cfg.get("class_weighting", True)
     if use_class_weights:
-        print("\n  Class weighting ON:")
+        print("\n  Focal Loss with class weighting:")
         class_weights = compute_class_weights(train_dataset, num_classes, device)
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        criterion = FocalLoss(alpha=class_weights, gamma=2.0)
     else:
-        print("\n  Class weighting OFF (uniform loss)")
-        criterion = nn.CrossEntropyLoss()
+        criterion = FocalLoss(gamma=2.0)
 
     # --- Optimizer & Scheduler ---
     optimizer = torch.optim.AdamW(
@@ -320,6 +554,16 @@ def main():
             print(f"    history length: {len(history['train_loss'])} epochs recorded")
         else:
             print("\nNo checkpoint found — starting fresh.")
+
+    # --- Cost matrix (optional) ---
+    cost_matrix = train_cfg.get("cost_matrix", None)
+    if cost_matrix:
+        fn_cost = cost_matrix.get("fn_cost", 10.0)
+        fp_cost = cost_matrix.get("fp_cost", 1.0)
+        print(f"\n  Cost-sensitive threshold: FN_cost={fn_cost}, FP_cost={fp_cost}")
+    else:
+        fn_cost, fp_cost = None, None
+        print("\n  Standard F1-macro threshold optimization")
 
     # --- Training loop ---
     epochs = train_cfg["epochs"]
@@ -374,8 +618,8 @@ def main():
         avg_train_loss = train_loss_sum / max(n_batches, 1)
 
         # --- VALIDATE ---
-        val_loss, val_acc, val_f1_macro, val_f1_weighted, _, _ = evaluate(
-            model, val_loader, criterion, device
+        val_loss, val_acc, val_f1_macro, val_f1_weighted, _, _, val_threshold, _ = evaluate_with_threshold_search(
+            model, val_loader, criterion, device, num_classes, fn_cost, fp_cost
         )
         scheduler.step(val_f1_macro)
 
@@ -430,14 +674,23 @@ def main():
     if os.path.exists(best_ckpt_path):
         print("\nFinal TEST evaluation (best model):")
         model.load_state_dict(torch.load(best_ckpt_path, map_location=device))
-        test_loss, test_acc, test_f1_macro, test_f1_weighted, test_preds, test_labels = evaluate(
-            model, test_loader, criterion, device
+        test_loss, test_acc, test_f1_macro, test_f1_weighted, test_preds, test_labels, test_threshold, test_probs = evaluate_with_threshold_search(
+            model, test_loader, criterion, device, num_classes, fn_cost, fp_cost
         )
 
         target_names = ["Licit", "Suspicious", "Illicit"] if num_classes == 3 else ["Legitimate", "Illicit"]
+
+        # Standard classification report
+        print("\n" + "=" * 100)
+        print("STANDARD CLASSIFICATION REPORT")
+        print("=" * 100)
         print(classification_report(test_labels, test_preds, target_names=target_names, labels=list(range(num_classes))))
+        print(f"Optimal threshold: {test_threshold:.4f}")
         print(f"Test Loss: {test_loss:.4f} | Accuracy: {test_acc:.2%} | "
               f"F1_macro: {test_f1_macro:.4f} | F1_weighted: {test_f1_weighted:.4f}")
+
+        # Comprehensive metrics
+        print_comprehensive_metrics(test_labels, test_preds, test_probs, target_names=target_names)
     else:
         print("\nNo best_model.pt found — skipping test eval")
 
