@@ -25,6 +25,8 @@ class FocalLoss(nn.Module):
             targets: [N] class indices
         """
         ce_loss = F.cross_entropy(inputs, targets, reduction='none', weight=self.alpha)
+        # Clamp to prevent exp(-large) = 0 → (1-0)^gamma * large = large → NaN
+        ce_loss = torch.clamp(ce_loss, max=50.0)
         p_t = torch.exp(-ce_loss)
         focal_loss = (1 - p_t) ** self.gamma * ce_loss
 
