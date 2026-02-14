@@ -132,15 +132,19 @@ def khop_expand(raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop):
         print(f"    Found {len(neighbor_edges):,} edges touching frontier | {time.time() - t0:.1f}s")
 
         # Process edges: assign to subgraphs, find new nodes
+        BATCH_SIZE = 100_000
         new_nodes_this_hop = set()
         hop_edges = []
         hop_nodes = []
 
-        for row in neighbor_edges.iter_rows():
-            src, dst, txid = row[0], row[1], row[2]
-
-            src_sgs = current_node_to_sgs.get(src, set())
-            dst_sgs = current_node_to_sgs.get(dst, set())
+        for batch_start in range(0, len(neighbor_edges), BATCH_SIZE):
+            batch = neighbor_edges.slice(batch_start, BATCH_SIZE)
+            
+            for row in batch.iter_rows():
+                src, dst, txid = row[0], row[1], row[2]
+                
+                src_sgs = current_node_to_sgs.get(src, set())
+                dst_sgs = current_node_to_sgs.get(dst, set())
 
             if src_sgs and dst not in current_node_set:
                 # src is in subgraph(s), dst is external -> expand
@@ -164,6 +168,8 @@ def khop_expand(raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop):
                 shared_sgs = src_sgs & dst_sgs
                 for sg_id in shared_sgs:
                     hop_edges.append((src, dst, txid, sg_id))
+            if len(hop_edges) > 1_000_000:
+                print(f"    Buffered {len(hop_edges):,} edges, {len(hop_nodes):,} nodes...")
 
         all_expansion_nodes.extend(hop_nodes)
         all_expansion_edges.extend(hop_edges)
