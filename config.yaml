@@ -35,19 +35,19 @@ model:
   num_classes: 2
 
 training:
-  epochs: 100
-  batch_size: 64
+  epochs: 150
+  batch_size: 256
   learning_rate: 0.001
   weight_decay: 0.00001
-  lr_patience: 10
+  lr_patience: 15
   lr_factor: 0.5
-  early_stop_patience: 30
+  early_stop_patience: 40
   cost_matrix:
     fn_cost: 10.0
     fp_cost: 1.0
 
-  class_weighting: true
-  oversampling: true
+  class_weighting: false   # OFF — balanced_sampling already handles imbalance; both together causes NaN
+  oversampling: false      # ignored when balanced_sampling=true, explicit for clarity
   balanced_sampling: true  # Use BalancedBatchSampler instead of WeightedRandomSampler
 
   val_ratio: 0.15
