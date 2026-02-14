@@ -71,9 +71,27 @@ class Elliptic2Dataset(Dataset):
         if self.processed_dir in Elliptic2Dataset._cache:
             return Elliptic2Dataset._cache[self.processed_dir]
 
-        # 2. Disk cache (.pt plik)
+        # 2. Disk cache (.pt plik) — invalidate if k_hop changed
         cache_path = os.path.join(self.processed_dir, "all_graphs.pt")
-        if os.path.exists(cache_path):
+        summary_path = os.path.join(self.processed_dir, "summary.json")
+        cache_meta_path = os.path.join(self.processed_dir, "cache_meta.json")
+
+        # Check if cache is stale (k_hop mismatch)
+        cache_valid = os.path.exists(cache_path)
+        if cache_valid and os.path.exists(summary_path):
+            with open(summary_path) as f:
+                summary = json.load(f)
+            current_k_hop = summary.get("k_hop", 0)
+            cached_k_hop = None
+            if os.path.exists(cache_meta_path):
+                with open(cache_meta_path) as f:
+                    cached_k_hop = json.load(f).get("k_hop", None)
+            if cached_k_hop is not None and cached_k_hop != current_k_hop:
+                print(f"  Cache stale: k_hop changed ({cached_k_hop} -> {current_k_hop}), rebuilding...")
+                os.remove(cache_path)
+                cache_valid = False
+
+        if cache_valid:
             print("  Loading cached graphs from all_graphs.pt...")
             data_list = torch.load(cache_path, weights_only=False)
             print(f"  Loaded {len(data_list)} graphs from cache")
@@ -83,9 +101,16 @@ class Elliptic2Dataset(Dataset):
         # 3. Build from parquets
         data_list = self._load_and_build()
 
-        # Save cache
+        # Save cache + metadata for invalidation
         print(f"  Saving graph cache to {cache_path}...")
         torch.save(data_list, cache_path)
+
+        # Save cache metadata (k_hop) for future invalidation checks
+        if os.path.exists(summary_path):
+            with open(summary_path) as f:
+                summary = json.load(f)
+            with open(cache_meta_path, "w") as f:
+                json.dump({"k_hop": summary.get("k_hop", 0)}, f)
 
         Elliptic2Dataset._cache[self.processed_dir] = data_list
         return data_list
@@ -148,17 +173,22 @@ class Elliptic2Dataset(Dataset):
 
         # subgraph_id -> list of (src, dst, txId)
         subgraph_to_edges = {}
+        has_sg_col = "subgraph_id" in edges_df.columns
         for row in edges_df.iter_rows(named=True):
-            sg_id = row.get("subgraph_id", None)
-            if sg_id is None:
+            if has_sg_col:
+                sg_id = row["subgraph_id"]
+            else:
+                # Fallback for old edges.parquet without subgraph_id
                 src = row["source"]
+                sg_id = None
                 for sg, nodes in subgraph_to_nodes.items():
                     if src in nodes:
                         sg_id = sg
                         break
-            if sg_id not in subgraph_to_edges:
-                subgraph_to_edges[sg_id] = []
-            subgraph_to_edges[sg_id].append((row["source"], row["target"], row["txId"]))
+            if sg_id is not None:
+                if sg_id not in subgraph_to_edges:
+                    subgraph_to_edges[sg_id] = []
+                subgraph_to_edges[sg_id].append((row["source"], row["target"], row["txId"]))
 
         # ============================================================
         # Build Data objects per subgraph

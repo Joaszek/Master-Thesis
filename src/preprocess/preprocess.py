@@ -1,8 +1,11 @@
 """
-preprocess.py — Elliptic2 Feature Extraction
-=============================================
-Wyciąg node/edge features z dużych background plików
-TYLKO dla nodów/krawędzi, które są w labeled subgrafach.
+preprocess.py — Elliptic2 Feature Extraction + k-hop Expansion
+===============================================================
+Extracts node/edge features from large background files
+for nodes/edges in labeled subgraphs.
+
+Optionally expands subgraphs by k hops using the background graph,
+giving models more structural context.
 
 Usage:
     python preprocess.py
@@ -13,6 +16,7 @@ import json
 import yaml
 import tempfile
 import polars as pl
+from collections import defaultdict
 
 
 # ============================================================
@@ -78,6 +82,99 @@ def cleanup_tmp_files(dirpath):
             print(f"  Cleaned: {f}")
 
 
+def khop_expand(raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop):
+    """
+    Expand subgraphs by k hops using background_edges.csv.
+
+    Args:
+        raw_dir: path to raw data directory
+        col_cfg: column config from config.yaml
+        node_to_subgraphs: dict mapping node_id -> set of subgraph_ids it belongs to
+        node_id_set: set of all current node IDs
+        k_hop: number of hops to expand
+
+    Returns:
+        expansion_nodes: list of (node_id, subgraph_id) tuples for new nodes
+        expansion_edges: list of (source, target, txId, subgraph_id) tuples for new edges
+    """
+    bg_src_col = col_cfg["background_edges"]["source"]
+    bg_dst_col = col_cfg["background_edges"]["target"]
+    bg_txid_col = col_cfg["background_edges"]["txId"]
+
+    all_expansion_nodes = []  # (node_id, subgraph_id)
+    all_expansion_edges = []  # (source, target, txId, subgraph_id)
+
+    current_node_set = set(node_id_set)
+    current_node_to_sgs = defaultdict(set)
+    for nid, sgs in node_to_subgraphs.items():
+        current_node_to_sgs[nid] = set(sgs)
+
+    for hop in range(1, k_hop + 1):
+        print(f"\n  Hop {hop}/{k_hop}: scanning background_edges.csv...")
+        print(f"    Current frontier: {len(current_node_set):,} nodes")
+        t0 = time.time()
+
+        # Scan background_edges: find edges touching current node set
+        current_node_list = list(current_node_set)
+        bg_edges_lazy = pl.scan_csv(f"{raw_dir}/background_edges.csv")
+
+        # Filter: source OR target is in our node set
+        neighbor_edges = (
+            bg_edges_lazy
+            .filter(
+                pl.col(bg_src_col).is_in(current_node_list) |
+                pl.col(bg_dst_col).is_in(current_node_list)
+            )
+            .select([bg_src_col, bg_dst_col, bg_txid_col])
+            .collect(engine="streaming")
+        )
+
+        print(f"    Found {len(neighbor_edges):,} edges touching frontier | {time.time() - t0:.1f}s")
+
+        # Process edges: assign to subgraphs, find new nodes
+        new_nodes_this_hop = set()
+        hop_edges = []
+        hop_nodes = []
+
+        for row in neighbor_edges.iter_rows():
+            src, dst, txid = row[0], row[1], row[2]
+
+            src_sgs = current_node_to_sgs.get(src, set())
+            dst_sgs = current_node_to_sgs.get(dst, set())
+
+            if src_sgs and dst not in current_node_set:
+                # src is in subgraph(s), dst is external -> expand
+                for sg_id in src_sgs:
+                    hop_edges.append((src, dst, txid, sg_id))
+                    hop_nodes.append((dst, sg_id))
+                new_nodes_this_hop.add(dst)
+                current_node_to_sgs[dst].update(src_sgs)
+
+            elif dst_sgs and src not in current_node_set:
+                # dst is in subgraph(s), src is external -> expand
+                for sg_id in dst_sgs:
+                    hop_edges.append((src, dst, txid, sg_id))
+                    hop_nodes.append((src, sg_id))
+                new_nodes_this_hop.add(src)
+                current_node_to_sgs[src].update(dst_sgs)
+
+            elif src_sgs and dst_sgs:
+                # Both endpoints already in our set — edge between known nodes
+                # Add edge to all subgraphs that both endpoints share
+                shared_sgs = src_sgs & dst_sgs
+                for sg_id in shared_sgs:
+                    hop_edges.append((src, dst, txid, sg_id))
+
+        all_expansion_nodes.extend(hop_nodes)
+        all_expansion_edges.extend(hop_edges)
+        current_node_set.update(new_nodes_this_hop)
+
+        print(f"    New nodes this hop: {len(new_nodes_this_hop):,}")
+        print(f"    New edges this hop: {len(hop_edges):,}")
+
+    return all_expansion_nodes, all_expansion_edges, current_node_set
+
+
 # ============================================================
 # Main preprocessing
 # ============================================================
@@ -85,6 +182,7 @@ def main():
     config = load_config()
     raw_dir, out_dir = resolve_path(config)
     col_cfg = config["data"]["columns"]
+    k_hop = config["data"].get("k_hop", 0)
     os.makedirs(out_dir, exist_ok=True)
     cleanup_tmp_files(out_dir)
 
@@ -94,7 +192,7 @@ def main():
     # STEP 1: Load labeled files
     # ================================================================
     print("\n" + "=" * 60)
-    print("[1/5] Loading labeled subgraph files...")
+    print("[1/6] Loading labeled subgraph files...")
     print("=" * 60)
 
     nodes_df = pl.read_csv(f"{raw_dir}/nodes.csv")
@@ -125,16 +223,9 @@ def main():
     print(f"  edges.csv:                {len(edges_df):>10,} rows")
     print(f"  connected_components.csv: {len(components_df):>10,} rows")
 
-    # Unique IDs to extract
-    node_ids = nodes_df[node_id_col].unique()
-    node_id_list = node_ids.to_list()
-    node_id_set = set(node_id_list)
-
-    txid_list = edges_df[edge_txid_col].unique().to_list()
-    txid_set = set(txid_list)
-
-    print(f"\n  Unique nodes to extract: {len(node_id_set):,}")
-    print(f"  Unique txIds to extract: {len(txid_set):,}")
+    # Rename to standard names early
+    nodes_df = nodes_df.rename({node_id_col: "node_id", node_subgraph_col: "subgraph_id"})
+    edges_df = edges_df.rename({edge_src_col: "source", edge_dst_col: "target", edge_txid_col: "txId"})
 
     # Label distribution
     label_counts = components_df[comp_label_col].value_counts().sort("count", descending=True)
@@ -142,38 +233,117 @@ def main():
     for row in label_counts.iter_rows():
         print(f"    Label {row[0]}: {row[1]:,} ({row[1] / len(components_df) * 100:.1f}%)")
 
+    original_num_nodes = len(nodes_df)
+    original_num_edges = len(edges_df)
+
     # ================================================================
-    # STEP 1b: Save small parquet files (atomic, resume-safe)
+    # STEP 2: k-hop expansion (if enabled)
     # ================================================================
+    print("\n" + "=" * 60)
+    print(f"[2/6] k-hop expansion (k={k_hop})...")
+    print("=" * 60)
+
+    if k_hop > 0:
+        # Build node -> subgraph mapping
+        node_to_subgraphs = defaultdict(set)
+        for row in nodes_df.iter_rows(named=True):
+            node_to_subgraphs[row["node_id"]].add(row["subgraph_id"])
+
+        node_id_set = set(nodes_df["node_id"].to_list())
+
+        expansion_nodes, expansion_edges, expanded_node_set = khop_expand(
+            raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop
+        )
+
+        # Add expansion nodes to nodes_df
+        if expansion_nodes:
+            exp_nodes_df = pl.DataFrame(
+                {"node_id": [n[0] for n in expansion_nodes],
+                 "subgraph_id": [n[1] for n in expansion_nodes]}
+            ).unique()
+            nodes_df = pl.concat([nodes_df, exp_nodes_df])
+            print(f"\n  Expanded nodes: {original_num_nodes:,} -> {len(nodes_df):,} (+{len(nodes_df) - original_num_nodes:,})")
+
+        # Add subgraph_id to original edges using source node lookup
+        src_to_sg = dict(zip(nodes_df["node_id"].to_list(), nodes_df["subgraph_id"].to_list()))
+        edges_df = edges_df.with_columns(
+            pl.col("source").replace(src_to_sg, default=None).alias("subgraph_id")
+        )
+
+        # Add expansion edges
+        if expansion_edges:
+            exp_edges_df = pl.DataFrame({
+                "source": [e[0] for e in expansion_edges],
+                "target": [e[1] for e in expansion_edges],
+                "txId": [e[2] for e in expansion_edges],
+                "subgraph_id": [e[3] for e in expansion_edges],
+            }).unique()
+            edges_df = pl.concat([edges_df, exp_edges_df])
+            print(f"  Expanded edges: {original_num_edges:,} -> {len(edges_df):,} (+{len(edges_df) - original_num_edges:,})")
+
+        node_id_set = expanded_node_set
+    else:
+        print("  k_hop=0 — no expansion")
+        node_id_set = set(nodes_df["node_id"].to_list())
+
+        # Still add subgraph_id to edges for consistency
+        src_to_sg = dict(zip(nodes_df["node_id"].to_list(), nodes_df["subgraph_id"].to_list()))
+        edges_df = edges_df.with_columns(
+            pl.col("source").replace(src_to_sg, default=None).alias("subgraph_id")
+        )
+
+    # Update ID sets for feature extraction
+    node_id_list = list(node_id_set)
+    txid_set = set(edges_df["txId"].to_list())
+    txid_list = list(txid_set)
+
+    print(f"\n  Final unique nodes to extract: {len(node_id_set):,}")
+    print(f"  Final unique txIds to extract: {len(txid_set):,}")
+
+    # ================================================================
+    # STEP 3: Save parquet files (atomic, resume-safe)
+    # ================================================================
+    print("\n" + "=" * 60)
+    print("[3/6] Saving parquet files...")
+    print("=" * 60)
+
     nodes_parquet_path = f"{out_dir}/nodes.parquet"
     edges_parquet_path = f"{out_dir}/edges.parquet"
     components_parquet_path = f"{out_dir}/components.parquet"
 
+    # Check if k_hop changed — force rewrite
+    summary_path = f"{out_dir}/summary.json"
+    if os.path.exists(summary_path):
+        with open(summary_path) as f:
+            old_summary = json.load(f)
+        if old_summary.get("k_hop", 0) != k_hop:
+            print(f"  k_hop changed ({old_summary.get('k_hop', 0)} -> {k_hop}) — forcing rewrite of all files")
+            for p in [nodes_parquet_path, edges_parquet_path,
+                       f"{out_dir}/node_features.parquet", f"{out_dir}/edge_features.parquet",
+                       f"{out_dir}/all_graphs.pt"]:
+                if os.path.exists(p):
+                    os.remove(p)
+                    print(f"    removed {p}")
+
     # nodes.parquet
     if not os.path.exists(nodes_parquet_path):
         print("\n  Writing nodes.parquet...")
-        atomic_write_parquet(
-            nodes_df.rename({node_id_col: "node_id", node_subgraph_col: "subgraph_id"}),
-            nodes_parquet_path
-        )
+        atomic_write_parquet(nodes_df, nodes_parquet_path)
     else:
         print("\n  nodes.parquet exists — skipped")
 
-    # edges.parquet (with txId check)
+    # edges.parquet
     if os.path.exists(edges_parquet_path):
         _check = pl.read_parquet(edges_parquet_path, n_rows=1)
-        if "txId" not in _check.columns:
-            print("  Old edges.parquet without txId — removing, rewriting...")
+        if "subgraph_id" not in _check.columns:
+            print("  Old edges.parquet without subgraph_id — removing, rewriting...")
             os.remove(edges_parquet_path)
-        else:
-            print("  edges.parquet exists — skipped")
 
     if not os.path.exists(edges_parquet_path):
         print("  Writing edges.parquet...")
-        atomic_write_parquet(
-            edges_df.rename({edge_src_col: "source", edge_dst_col: "target", edge_txid_col: "txId"}),
-            edges_parquet_path
-        )
+        atomic_write_parquet(edges_df, edges_parquet_path)
+    else:
+        print("  edges.parquet exists — skipped")
 
     # components.parquet (with int type check)
     if os.path.exists(components_parquet_path):
@@ -195,12 +365,12 @@ def main():
         atomic_write_parquet(components_to_save, components_parquet_path)
 
     # ================================================================
-    # STEP 2: Extract node features from background_nodes.csv
+    # STEP 4: Extract node features from background_nodes.csv
     # ================================================================
     node_features_path = f"{out_dir}/node_features.parquet"
 
     print("\n" + "=" * 60)
-    print("[2/5] Node features from background_nodes.csv...")
+    print("[4/6] Node features from background_nodes.csv...")
     print("=" * 60)
 
     if os.path.exists(node_features_path):
@@ -226,12 +396,12 @@ def main():
         print(f"  Saved node_features.parquet")
 
     # ================================================================
-    # STEP 3: Extract edge features from background_edges.csv
+    # STEP 5: Extract edge features from background_edges.csv
     # ================================================================
     edge_features_path = f"{out_dir}/edge_features.parquet"
 
     print("\n" + "=" * 60)
-    print("[3/5] Edge features from background_edges.csv...")
+    print("[5/6] Edge features from background_edges.csv...")
     print("=" * 60)
 
     if os.path.exists(edge_features_path):
@@ -255,7 +425,7 @@ def main():
         print(f"  background_edges: {len(bg_edges_lazy.collect_schema().names())} columns | "
               f"txId='{bg_txid_col}', src='{bg_src_col}', dst='{bg_dst_col}'")
 
-        # Single filter by txId — matchuje 367K krawędzi z 414M
+        # Single filter by txId
         filtered_edge_features = (
             bg_edges_lazy
             .filter(pl.col(bg_txid_col).is_in(txid_list))
@@ -276,10 +446,10 @@ def main():
         print(f"  Saved edge_features.parquet")
 
     # ================================================================
-    # STEP 4: Validation
+    # STEP 6: Validation & Summary
     # ================================================================
     print("\n" + "=" * 60)
-    print("[4/5] Validation...")
+    print("[6/6] Validation & Summary...")
     print("=" * 60)
 
     found_nodes = set(filtered_node_features["node_id"].to_list())
@@ -295,17 +465,13 @@ def main():
     if not missing_nodes and not missing_edges:
         print("  All nodes and edges matched")
 
-    # ================================================================
-    # STEP 5: Save summary (atomic)
-    # ================================================================
-    print("\n" + "=" * 60)
-    print("[5/5] Saving summary...")
-    print("=" * 60)
-
     summary = {
         "num_subgraphs": len(components_df),
         "num_nodes": len(nodes_df),
         "num_edges": len(edges_df),
+        "original_nodes": original_num_nodes,
+        "original_edges": original_num_edges,
+        "k_hop": k_hop,
         "node_feature_dims": node_feat_dim,
         "edge_feature_dims": edge_feat_dim,
         "labels": label_counts.to_dicts(),
@@ -324,6 +490,9 @@ def main():
     print(f"\n  Output: {out_dir}/")
     print(f"  Files:  {os.listdir(out_dir)}")
     print(f"  Node features: {node_feat_dim} dims | Edge features: {edge_feat_dim} dims")
+    if k_hop > 0:
+        print(f"  k-hop expansion: {original_num_nodes:,} -> {len(nodes_df):,} nodes | "
+              f"{original_num_edges:,} -> {len(edges_df):,} edges")
 
 
 if __name__ == "__main__":
