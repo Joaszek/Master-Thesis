@@ -465,16 +465,33 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         criterion = FocalLoss(gamma=2.0)
 
     # --- Optimizer & Scheduler ---
+    warmup_epochs = train_cfg.get("warmup_epochs", 5)
+    base_lr = train_cfg["learning_rate"]
+
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=train_cfg["learning_rate"],
+        lr=base_lr,
         weight_decay=train_cfg["weight_decay"],
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max",
         patience=train_cfg["lr_patience"],
         factor=train_cfg["lr_factor"],
     )
+
+    def apply_warmup_lr(epoch):
+        """Linear warmup: ramp from base_lr/10 to base_lr over warmup_epochs."""
+        if epoch < warmup_epochs:
+            warmup_factor = 0.1 + 0.9 * (epoch / warmup_epochs)
+            for pg in optimizer.param_groups:
+                pg["lr"] = base_lr * warmup_factor
+
+    def step_scheduler(epoch, val_f1_macro):
+        """Warmup for first N epochs, then ReduceLROnPlateau."""
+        if epoch < warmup_epochs:
+            pass  # warmup LR is set at start of epoch via apply_warmup_lr
+        else:
+            plateau_scheduler.step(val_f1_macro)
 
     # --- Resume / Fresh ---
     start_epoch = 0
@@ -496,7 +513,8 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
             state = torch.load(last_ckpt_path, map_location="cpu")
             model.load_state_dict(state["model_state_dict"])
             optimizer.load_state_dict(state["optimizer_state_dict"])
-            scheduler.load_state_dict(state["scheduler_state_dict"])
+            if "scheduler_state_dict" in state:
+                plateau_scheduler.load_state_dict(state["scheduler_state_dict"])
             start_epoch     = state["epoch"] + 1
             best_val_f1     = state.get("best_val_f1", 0.0)
             history         = state.get("history", history)
@@ -531,9 +549,12 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         for epoch in range(start_epoch, epochs):
             final_epoch = epoch
             _GLOBAL_SAVE_STATE = {
-                "state": build_save_state(epoch - 1 if epoch > 0 else 0, model, optimizer, scheduler, best_val_f1, history),
+                "state": build_save_state(epoch - 1 if epoch > 0 else 0, model, optimizer, plateau_scheduler, best_val_f1, history),
                 "path": last_ckpt_path,
             }
+
+            # Apply warmup LR at start of epoch
+            apply_warmup_lr(epoch)
 
             # --- TRAIN ---
             model.train()
@@ -569,7 +590,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
             val_loss, val_acc, val_f1_macro, val_f1_weighted, _, _, _, _ = evaluate_with_threshold_search(
                 model, val_loader, criterion, device, num_classes, fn_cost, fp_cost
             )
-            scheduler.step(val_f1_macro)
+            step_scheduler(epoch, val_f1_macro)
 
             # --- LOG ---
             current_lr = optimizer.param_groups[0]["lr"]
@@ -593,7 +614,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
 
             # --- CHECKPOINT ---
             if (epoch + 1) % save_every == 0:
-                state = build_save_state(epoch, model, optimizer, scheduler, best_val_f1, history)
+                state = build_save_state(epoch, model, optimizer, plateau_scheduler, best_val_f1, history)
                 state["patience_counter"] = patience_counter
                 atomic_save(state, last_ckpt_path)
                 _GLOBAL_SAVE_STATE = {"state": state, "path": last_ckpt_path}
@@ -604,7 +625,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
                 break
 
         # POST-TRAINING save
-        state = build_save_state(final_epoch, model, optimizer, scheduler, best_val_f1, history)
+        state = build_save_state(final_epoch, model, optimizer, plateau_scheduler, best_val_f1, history)
         state["patience_counter"] = patience_counter
         atomic_save(state, last_ckpt_path)
 

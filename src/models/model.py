@@ -125,7 +125,11 @@ class SAGEEdgeBlock(nn.Module):
 
 class EllipticGNN(nn.Module):
     """
-    Full GNN model: [Edge Projection →] Conv layers → Pooling → MLP Classifier
+    Full GNN model: [Edge Projection ->] Conv layers -> JK Aggregation -> Pooling -> MLP Classifier
+
+    Jumping Knowledge (JK) connections: concatenates outputs from ALL conv layers,
+    giving the model a multi-scale view (local features from early layers +
+    global structure from later layers) without adding more layers.
 
     Supports three conv_type architectures:
       - "gatv2":     GATv2 with native edge feature support
@@ -135,12 +139,12 @@ class EllipticGNN(nn.Module):
     Args:
         node_feat_dim:  input node feature dimension
         edge_feat_dim:  input edge feature dimension
-        hidden_dim:     hidden layer width (128 default)
-        num_layers:     number of conv layers (3 default)
-        heads:          multi-head attention heads (4 default, only for gatv2)
-        edge_proj_dim:  edge feature projection dimension (32 default)
+        hidden_dim:     hidden layer width
+        num_layers:     number of conv layers
+        heads:          multi-head attention heads (only for gatv2)
+        edge_proj_dim:  edge feature projection dimension
         num_classes:    output classes (2 = binary)
-        dropout:        dropout rate (0.3 default)
+        dropout:        dropout rate
         conv_type:      "gatv2", "sage", or "sage_edge"
     """
 
@@ -200,11 +204,19 @@ class EllipticGNN(nn.Module):
             else:
                 raise ValueError(f"Unknown conv_type: {conv_type}")
 
+        # Jumping Knowledge: project concatenated multi-scale features back to hidden_dim
+        # Input: num_layers * hidden_dim (one hidden_dim per layer output)
+        self.jk_proj = nn.Sequential(
+            nn.Linear(num_layers * hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+        )
+
         # Triple pooling: attention + mean + max
         self.att_pool = AttentionPooling(hidden_dim)
         self.readout_dim = hidden_dim * 3
 
-        # Deeper classifier with BatchNorm for better generalization
+        # Classifier with BatchNorm
         self.classifier = nn.Sequential(
             nn.Linear(self.readout_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
@@ -235,9 +247,15 @@ class EllipticGNN(nn.Module):
 
         x = self.input_proj(x)
 
+        # Collect outputs from each layer for Jumping Knowledge
+        layer_outputs = []
         for conv_block in self.conv_layers:
             x_new = conv_block(x, edge_index, edge_attr)
             x = x + x_new  # residual connection
+            layer_outputs.append(x)
+
+        # JK aggregation: concatenate all layer outputs and project
+        x = self.jk_proj(torch.cat(layer_outputs, dim=-1))
 
         # Triple pooling: attention + mean + max
         x_att = self.att_pool(x, batch)

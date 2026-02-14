@@ -27,7 +27,7 @@ data:
       target: "clId2"
 
 model:
-  hidden_dim: 128
+  hidden_dim: 256
   num_layers: 3
   heads: 4
   edge_proj_dim: 32
@@ -38,12 +38,13 @@ training:
   epochs: 150
   batch_size: 256
   learning_rate: 0.001
+  warmup_epochs: 5
   weight_decay: 0.00001
   lr_patience: 15
   lr_factor: 0.5
   early_stop_patience: 40
   cost_matrix:
-    fn_cost: 10.0
+    fn_cost: 25.0
     fp_cost: 1.0
 
   class_weighting: false   # OFF — balanced_sampling already handles imbalance; both together causes NaN
