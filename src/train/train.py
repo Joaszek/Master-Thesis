@@ -497,6 +497,7 @@ def main():
     print(f"    Parameters: {model.count_params():,}")
 
     # --- Class-weighted loss ---
+    use_class_weights = train_cfg.get("class_weighting", True)
     if use_class_weights:
         print("\n  Focal Loss with class weighting:")
         class_weights = compute_class_weights(train_dataset, num_classes, device)
