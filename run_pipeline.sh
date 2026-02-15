@@ -259,3 +259,5 @@ pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pyt
 pip install -r requirements.txt
 python3 src/preprocess/preprocess.py
 python3 src/train/train.py --fresh
+python3 src/train/plotting.py --results data/results/full_results.json
+python3 src/train/statistics.py --results data/results/full_results.json
