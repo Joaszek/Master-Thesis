@@ -139,35 +139,36 @@ def khop_expand(raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop):
 
         for batch_start in range(0, len(neighbor_edges), BATCH_SIZE):
             batch = neighbor_edges.slice(batch_start, BATCH_SIZE)
-            
+
             for row in batch.iter_rows():
                 src, dst, txid = row[0], row[1], row[2]
-                
+
                 src_sgs = current_node_to_sgs.get(src, set())
                 dst_sgs = current_node_to_sgs.get(dst, set())
 
-            if src_sgs and dst not in current_node_set:
-                # src is in subgraph(s), dst is external -> expand
-                for sg_id in src_sgs:
-                    hop_edges.append((src, dst, txid, sg_id))
-                    hop_nodes.append((dst, sg_id))
-                new_nodes_this_hop.add(dst)
-                current_node_to_sgs[dst].update(src_sgs)
+                if src_sgs and dst not in current_node_set:
+                    # src is in subgraph(s), dst is external -> expand
+                    for sg_id in src_sgs:
+                        hop_edges.append((src, dst, txid, sg_id))
+                        hop_nodes.append((dst, sg_id))
+                    new_nodes_this_hop.add(dst)
+                    current_node_to_sgs[dst].update(src_sgs)
 
-            elif dst_sgs and src not in current_node_set:
-                # dst is in subgraph(s), src is external -> expand
-                for sg_id in dst_sgs:
-                    hop_edges.append((src, dst, txid, sg_id))
-                    hop_nodes.append((src, sg_id))
-                new_nodes_this_hop.add(src)
-                current_node_to_sgs[src].update(dst_sgs)
+                elif dst_sgs and src not in current_node_set:
+                    # dst is in subgraph(s), src is external -> expand
+                    for sg_id in dst_sgs:
+                        hop_edges.append((src, dst, txid, sg_id))
+                        hop_nodes.append((src, sg_id))
+                    new_nodes_this_hop.add(src)
+                    current_node_to_sgs[src].update(dst_sgs)
 
-            elif src_sgs and dst_sgs:
-                # Both endpoints already in our set — edge between known nodes
-                # Add edge to all subgraphs that both endpoints share
-                shared_sgs = src_sgs & dst_sgs
-                for sg_id in shared_sgs:
-                    hop_edges.append((src, dst, txid, sg_id))
+                elif src_sgs and dst_sgs:
+                    # Both endpoints already in our set — edge between known nodes
+                    # Add edge to all subgraphs that both endpoints share
+                    shared_sgs = src_sgs & dst_sgs
+                    for sg_id in shared_sgs:
+                        hop_edges.append((src, dst, txid, sg_id))
+
             if len(hop_edges) > 1_000_000:
                 print(f"    Buffered {len(hop_edges):,} edges, {len(hop_nodes):,} nodes...")
 

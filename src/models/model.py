@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GATv2Conv, SAGEConv, BatchNorm, global_mean_pool, global_max_pool
+from torch_geometric.nn import GATv2Conv, SAGEConv, GINConv, BatchNorm, global_mean_pool, global_max_pool
 from torch_scatter import scatter_add, scatter_max, scatter_mean
 
 
@@ -123,6 +123,29 @@ class SAGEEdgeBlock(nn.Module):
         return x_out
 
 
+class GINBlock(nn.Module):
+    """Graph Isomorphism Network block — maximally expressive GNN baseline."""
+    def __init__(self, in_dim, out_dim, dropout):
+        super().__init__()
+        mlp = nn.Sequential(
+            nn.Linear(in_dim, out_dim),
+            nn.BatchNorm1d(out_dim),
+            nn.ReLU(),
+            nn.Linear(out_dim, out_dim),
+        )
+        self.conv = GINConv(mlp, train_eps=True)
+        self.norm = nn.LayerNorm(out_dim)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, edge_index, edge_attr=None):
+        x = self.conv(x, edge_index)
+        x = self.norm(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+        return x
+
+
 class EllipticGNN(nn.Module):
     """
     Full GNN model: [Edge Projection ->] Conv layers -> JK Aggregation -> Pooling -> MLP Classifier
@@ -131,10 +154,11 @@ class EllipticGNN(nn.Module):
     giving the model a multi-scale view (local features from early layers +
     global structure from later layers) without adding more layers.
 
-    Supports three conv_type architectures:
+    Supports four conv_type architectures:
       - "gatv2":     GATv2 with native edge feature support
       - "sage":      Standard GraphSAGE (no edge features)
       - "sage_edge": GraphSAGE with edge features aggregated to nodes
+      - "gin":       Graph Isomorphism Network (maximally expressive baseline)
 
     Args:
         node_feat_dim:  input node feature dimension
@@ -159,6 +183,7 @@ class EllipticGNN(nn.Module):
 
         # Edge projection — only needed for gatv2 and sage_edge
         self.uses_edge_features = conv_type in ("gatv2", "sage_edge")
+        assert conv_type in ("gatv2", "sage", "sage_edge", "gin"), f"Unknown conv_type: {conv_type}"
         if self.uses_edge_features:
             self.edge_proj = EdgeProjection(edge_feat_dim, edge_proj_dim)
         else:
@@ -201,8 +226,14 @@ class EllipticGNN(nn.Module):
                         dropout=dropout
                     )
                 )
-            else:
-                raise ValueError(f"Unknown conv_type: {conv_type}")
+            elif conv_type == "gin":
+                self.conv_layers.append(
+                    GINBlock(
+                        in_dim=hidden_dim,
+                        out_dim=hidden_dim,
+                        dropout=dropout
+                    )
+                )
 
         # Jumping Knowledge: project concatenated multi-scale features back to hidden_dim
         # Input: num_layers * hidden_dim (one hidden_dim per layer output)

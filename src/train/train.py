@@ -10,6 +10,8 @@ import argparse
 import yaml
 import tempfile
 
+import random
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -25,6 +27,19 @@ from tqdm import tqdm
 from src.dataset.Elliptic2Dataset import Elliptic2Dataset
 from src.models.model import EllipticGNN
 from src.models.losses import FocalLoss
+from src.models.calibration import fit_temperature
+
+
+def set_all_seeds(seed):
+    """Set all random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 _GLOBAL_SAVE_STATE = {}
@@ -407,6 +422,7 @@ ARCH_NAMES = {
     "gatv2": "GATv2",
     "sage": "SAGE",
     "sage_edge": "SAGE+Edge",
+    "gin": "GIN",
 }
 
 
@@ -457,27 +473,43 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
 
     # --- Loss ---
     use_class_weights = train_cfg.get("class_weighting", False)
+    label_smoothing = train_cfg.get("label_smoothing", 0.0)
     if use_class_weights:
         print("\n  Focal Loss with class weighting:")
         class_weights = compute_class_weights(train_dataset, num_classes, device)
-        criterion = FocalLoss(alpha=class_weights, gamma=2.0)
+        criterion = FocalLoss(alpha=class_weights, gamma=2.0, label_smoothing=label_smoothing)
     else:
-        criterion = FocalLoss(gamma=2.0)
+        criterion = FocalLoss(gamma=2.0, label_smoothing=label_smoothing)
+    if label_smoothing > 0:
+        print(f"    Label smoothing: {label_smoothing}")
 
     # --- Optimizer & Scheduler ---
     warmup_epochs = train_cfg.get("warmup_epochs", 5)
     base_lr = train_cfg["learning_rate"]
+    lr_schedule = train_cfg.get("lr_schedule", "plateau")
+    epochs = train_cfg["epochs"]
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=base_lr,
         weight_decay=train_cfg["weight_decay"],
     )
-    plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max",
-        patience=train_cfg["lr_patience"],
-        factor=train_cfg["lr_factor"],
-    )
+
+    if lr_schedule == "cosine":
+        # CosineAnnealingLR after warmup — T_max = remaining epochs after warmup
+        cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(epochs - warmup_epochs, 1), eta_min=1e-6
+        )
+        plateau_scheduler = None
+        print(f"    LR schedule: cosine annealing (T_max={epochs - warmup_epochs})")
+    else:
+        cosine_scheduler = None
+        plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="max",
+            patience=train_cfg["lr_patience"],
+            factor=train_cfg["lr_factor"],
+        )
+        print(f"    LR schedule: ReduceLROnPlateau (patience={train_cfg['lr_patience']})")
 
     def apply_warmup_lr(epoch):
         """Linear warmup: ramp from base_lr/10 to base_lr over warmup_epochs."""
@@ -487,11 +519,16 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
                 pg["lr"] = base_lr * warmup_factor
 
     def step_scheduler(epoch, val_f1_macro):
-        """Warmup for first N epochs, then ReduceLROnPlateau."""
+        """Warmup for first N epochs, then scheduled LR."""
         if epoch < warmup_epochs:
             pass  # warmup LR is set at start of epoch via apply_warmup_lr
+        elif cosine_scheduler is not None:
+            cosine_scheduler.step()
         else:
             plateau_scheduler.step(val_f1_macro)
+
+    # Use whichever scheduler is active for checkpoint saving
+    active_scheduler = cosine_scheduler if cosine_scheduler is not None else plateau_scheduler
 
     # --- Resume / Fresh ---
     start_epoch = 0
@@ -513,8 +550,8 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
             state = torch.load(last_ckpt_path, map_location="cpu")
             model.load_state_dict(state["model_state_dict"])
             optimizer.load_state_dict(state["optimizer_state_dict"])
-            if "scheduler_state_dict" in state:
-                plateau_scheduler.load_state_dict(state["scheduler_state_dict"])
+            if "scheduler_state_dict" in state and active_scheduler is not None:
+                active_scheduler.load_state_dict(state["scheduler_state_dict"])
             start_epoch     = state["epoch"] + 1
             best_val_f1     = state.get("best_val_f1", 0.0)
             history         = state.get("history", history)
@@ -530,7 +567,6 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         fn_cost, fp_cost = None, None
 
     # --- Training loop ---
-    epochs = train_cfg["epochs"]
     early_stop_patience = train_cfg["early_stop_patience"]
     save_every = train_cfg["save_every"]
 
@@ -549,7 +585,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         for epoch in range(start_epoch, epochs):
             final_epoch = epoch
             _GLOBAL_SAVE_STATE = {
-                "state": build_save_state(epoch - 1 if epoch > 0 else 0, model, optimizer, plateau_scheduler, best_val_f1, history),
+                "state": build_save_state(epoch - 1 if epoch > 0 else 0, model, optimizer, active_scheduler, best_val_f1, history),
                 "path": last_ckpt_path,
             }
 
@@ -614,7 +650,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
 
             # --- CHECKPOINT ---
             if (epoch + 1) % save_every == 0:
-                state = build_save_state(epoch, model, optimizer, plateau_scheduler, best_val_f1, history)
+                state = build_save_state(epoch, model, optimizer, active_scheduler, best_val_f1, history)
                 state["patience_counter"] = patience_counter
                 atomic_save(state, last_ckpt_path)
                 _GLOBAL_SAVE_STATE = {"state": state, "path": last_ckpt_path}
@@ -625,7 +661,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
                 break
 
         # POST-TRAINING save
-        state = build_save_state(final_epoch, model, optimizer, plateau_scheduler, best_val_f1, history)
+        state = build_save_state(final_epoch, model, optimizer, active_scheduler, best_val_f1, history)
         state["patience_counter"] = patience_counter
         atomic_save(state, last_ckpt_path)
 
@@ -645,6 +681,14 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
 
     print(f"\n[{arch_name}] Final TEST evaluation (best model):")
     model.load_state_dict(torch.load(best_ckpt_path, map_location=device))
+
+    # --- Post-hoc temperature scaling ---
+    use_calibration = train_cfg.get("calibration", False)
+    learned_temp = 1.0
+    if use_calibration:
+        print(f"\n  [{arch_name}] Fitting temperature scaling on validation set...")
+        learned_temp = fit_temperature(model, val_loader, device)
+
     test_loss, test_acc, test_f1_macro, test_f1_weighted, test_preds, test_labels, test_threshold, test_probs = evaluate_with_threshold_search(
         model, test_loader, criterion, device, num_classes, fn_cost, fp_cost
     )
@@ -663,6 +707,13 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
     # Comprehensive metrics
     extra = print_comprehensive_metrics(test_labels, test_preds, test_probs, target_names=target_names)
 
+    # AUC metrics
+    try:
+        roc_auc = roc_auc_score(test_labels, test_probs)
+        pr_auc = average_precision_score(test_labels, test_probs)
+    except ValueError:
+        roc_auc, pr_auc = 0.0, 0.0
+
     return {
         "arch": arch_name,
         "conv_type": conv_type,
@@ -672,12 +723,18 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         "f1_macro": test_f1_macro,
         "f1_weighted": test_f1_weighted,
         "threshold": test_threshold,
+        "roc_auc": roc_auc,
+        "pr_auc": pr_auc,
         "sensitivity": extra["sensitivity"],
         "specificity": extra["specificity"],
         "tp": extra["tp"],
         "fp": extra["fp"],
         "fn": extra["fn"],
         "tn": extra["tn"],
+        "temperature": learned_temp,
+        "test_probs": test_probs.tolist(),
+        "test_preds": test_preds.tolist(),
+        "test_labels": test_labels.tolist(),
     }
 
 
@@ -710,13 +767,42 @@ def print_comparison_table(results):
     print("#" * 100 + "\n")
 
 
+def print_multi_seed_summary(multi_seed_results):
+    """Print mean ± std summary across seeds for each architecture."""
+    print("\n" + "#" * 100)
+    print("#  MULTI-SEED RESULTS (mean ± std)")
+    print("#" * 100)
+
+    metrics = ["f1_macro", "test_acc", "roc_auc", "pr_auc", "sensitivity", "specificity", "threshold"]
+
+    header = f"{'Architecture':<14} | {'Seeds':>5}"
+    for m in metrics:
+        header += f" | {m:>16}"
+    print(header)
+    print("-" * len(header))
+
+    for arch, runs in multi_seed_results.items():
+        n = len(runs)
+        row = f"{arch:<14} | {n:>5}"
+        for m in metrics:
+            vals = [r[m] for r in runs]
+            mean_v = np.mean(vals)
+            std_v = np.std(vals)
+            row += f" | {mean_v:>7.4f}±{std_v:<6.4f}"
+        print(row)
+
+    print("#" * 100 + "\n")
+
+
 def main():
     global _GLOBAL_SAVE_STATE, _SIGTERM_RECEIVED
 
     parser = argparse.ArgumentParser(description="Train Elliptic2 GNN — multi-architecture comparison")
     parser.add_argument("--fresh", action="store_true", help="Force fresh start — removes all checkpoints")
     parser.add_argument("--arch", type=str, default=None,
-                        help="Run single architecture: gatv2, sage, sage_edge (default: run all)")
+                        help="Run single architecture: gatv2, sage, sage_edge, gin (default: run all)")
+    parser.add_argument("--seeds", type=str, default=None,
+                        help="Comma-separated seeds for multi-seed training (e.g., 42,123,456)")
     args = parser.parse_args()
 
     # --- Config ---
@@ -735,6 +821,14 @@ def main():
     processed_dir, checkpoint_dir = resolve_paths(config)
     os.makedirs(checkpoint_dir, exist_ok=True)
 
+    # --- Determine seeds ---
+    if args.seeds:
+        seeds = [int(s.strip()) for s in args.seeds.split(",")]
+    else:
+        seeds = train_cfg.get("seeds", [42])
+    multi_seed = len(seeds) > 1
+    print(f"  Seeds: {seeds} ({'multi-seed' if multi_seed else 'single-seed'})")
+
     # --- Check preprocessed data ---
     if not os.path.exists(f"{processed_dir}/summary.json"):
         print("\nERROR: Preprocessed data not found!")
@@ -752,7 +846,7 @@ def main():
           f"{summary['num_edges']:,} edges | "
           f"node_feat={node_feat_dim} | edge_feat={edge_feat_dim}")
 
-    # --- Load datasets (shared across architectures) ---
+    # --- Load datasets (shared across architectures and seeds) ---
     print("\nLoading datasets...")
     val_ratio = train_cfg["val_ratio"]
     test_ratio = train_cfg["test_ratio"]
@@ -763,39 +857,10 @@ def main():
 
     batch_size = train_cfg["batch_size"]
 
-    # --- Sampling strategy ---
-    use_balanced_sampling = train_cfg.get("balanced_sampling", False)
-    use_oversampling = train_cfg.get("oversampling", False)
-
-    if use_balanced_sampling:
-        print("\n  Balanced Batch Sampling ON (equal class distribution per batch)")
-        batch_sampler = BalancedBatchSampler(
-            labels=train_dataset.get_labels(),
-            batch_size=batch_size
-        )
-        train_loader = DataLoader(
-            train_dataset, batch_sampler=batch_sampler,
-            num_workers=4, pin_memory=True
-        )
-    elif use_oversampling:
-        print("\n  Oversampling ON (WeightedRandomSampler)")
-        sampler = make_weighted_sampler(train_dataset)
-        train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, sampler=sampler,
-            num_workers=4, pin_memory=True
-        )
-    else:
-        print("\n  Standard sampling (shuffle only)")
-        train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True,
-            num_workers=4, pin_memory=True
-        )
-
     val_loader  = DataLoader(val_dataset,  batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     print(f"    Train: {len(train_dataset):,} | Val: {len(val_dataset):,} | Test: {len(test_dataset):,}")
-    print(f"    Batch size: {batch_size} | Batches/epoch: {len(train_loader)}")
 
     # --- Clean graph cache if --fresh ---
     if args.fresh:
@@ -805,7 +870,7 @@ def main():
             print(f"    removed graph cache: {cache_path}")
 
     # --- Determine architectures to run ---
-    all_archs = ["gatv2", "sage", "sage_edge"]
+    all_archs = ["gatv2", "sage", "sage_edge", "gin"]
     if args.arch:
         if args.arch not in all_archs:
             print(f"\nERROR: Unknown architecture '{args.arch}'. Choose from: {all_archs}")
@@ -816,51 +881,126 @@ def main():
 
     print(f"\n  Architectures to train: {[ARCH_NAMES[a] for a in archs_to_run]}")
 
-    # --- Run each architecture ---
-    all_results = []
+    # --- Multi-seed training loop ---
+    # Results: {arch_name: [result_seed1, result_seed2, ...]}
+    multi_seed_results = {ARCH_NAMES[a]: [] for a in archs_to_run}
+    all_results = []  # flat list for backward compatibility
     total_start = time.time()
 
-    for conv_type in archs_to_run:
+    results_dir = config["data"].get("results", "data/results")
+    os.makedirs(results_dir, exist_ok=True)
+
+    for seed_idx, seed in enumerate(seeds):
+        print(f"\n{'=' * 100}")
+        print(f"  SEED {seed_idx+1}/{len(seeds)}: {seed}")
+        print(f"{'=' * 100}")
+
+        set_all_seeds(seed)
+
+        # Rebuild train loader with new seed (for balanced sampling randomness)
+        use_balanced_sampling = train_cfg.get("balanced_sampling", False)
+        use_oversampling = train_cfg.get("oversampling", False)
+
+        if use_balanced_sampling:
+            batch_sampler = BalancedBatchSampler(
+                labels=train_dataset.get_labels(),
+                batch_size=batch_size
+            )
+            train_loader = DataLoader(
+                train_dataset, batch_sampler=batch_sampler,
+                num_workers=4, pin_memory=True
+            )
+        elif use_oversampling:
+            sampler = make_weighted_sampler(train_dataset)
+            train_loader = DataLoader(
+                train_dataset, batch_size=batch_size, sampler=sampler,
+                num_workers=4, pin_memory=True
+            )
+        else:
+            train_loader = DataLoader(
+                train_dataset, batch_size=batch_size, shuffle=True,
+                num_workers=4, pin_memory=True
+            )
+
+        print(f"    Batch size: {batch_size} | Batches/epoch: {len(train_loader)}")
+
+        # Per-seed checkpoint directory
+        seed_ckpt_dir = os.path.join(checkpoint_dir, f"seed_{seed}") if multi_seed else checkpoint_dir
+
+        for conv_type in archs_to_run:
+            if _SIGTERM_RECEIVED:
+                print("\nSIGTERM received — stopping before next architecture")
+                break
+
+            result = train_and_evaluate(
+                conv_type=conv_type,
+                config=config,
+                device=device,
+                train_dataset=train_dataset,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                test_loader=test_loader,
+                node_feat_dim=node_feat_dim,
+                edge_feat_dim=edge_feat_dim,
+                checkpoint_dir=seed_ckpt_dir,
+                fresh=args.fresh,
+            )
+
+            if result is not None:
+                result["seed"] = seed
+                all_results.append(result)
+                multi_seed_results[result["arch"]].append(result)
+            else:
+                print(f"\n  [{ARCH_NAMES[conv_type]}] Training failed — excluded from comparison")
+
         if _SIGTERM_RECEIVED:
-            print("\nSIGTERM received — stopping before next architecture")
             break
 
-        result = train_and_evaluate(
-            conv_type=conv_type,
-            config=config,
-            device=device,
-            train_dataset=train_dataset,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            test_loader=test_loader,
-            node_feat_dim=node_feat_dim,
-            edge_feat_dim=edge_feat_dim,
-            checkpoint_dir=checkpoint_dir,
-            fresh=args.fresh,
-        )
-
-        if result is not None:
-            all_results.append(result)
-        else:
-            print(f"\n  [{ARCH_NAMES[conv_type]}] Training failed — excluded from comparison")
-
-    # --- Comparison table ---
+    # --- Summary ---
     total_time = time.time() - total_start
-    print(f"\nTotal time for all architectures: {total_time/60:.1f} min")
+    print(f"\nTotal time: {total_time/60:.1f} min")
 
     if len(all_results) > 1:
         print_comparison_table(all_results)
-    elif len(all_results) == 1:
-        print(f"\nOnly one architecture completed — no comparison table needed.")
-    else:
-        print("\nNo architectures completed successfully.")
 
-    # Save comparison results
+    if multi_seed:
+        print_multi_seed_summary(multi_seed_results)
+
+    # Save all results (without large arrays for JSON)
     if all_results:
-        comparison_path = os.path.join(checkpoint_dir, "comparison.json")
+        # Save compact results (without test_probs/preds/labels)
+        compact_results = []
+        for r in all_results:
+            compact = {k: v for k, v in r.items() if k not in ("test_probs", "test_preds", "test_labels")}
+            compact_results.append(compact)
+
+        comparison_path = os.path.join(results_dir, "comparison.json")
         with open(comparison_path, "w") as f:
-            json.dump(all_results, f, indent=2)
+            json.dump(compact_results, f, indent=2)
         print(f"Comparison saved to: {comparison_path}")
+
+        # Save full results with predictions (for statistical tests + plotting)
+        full_results_path = os.path.join(results_dir, "full_results.json")
+        with open(full_results_path, "w") as f:
+            json.dump(all_results, f, indent=2)
+        print(f"Full results (with predictions) saved to: {full_results_path}")
+
+        # Save multi-seed summary
+        if multi_seed:
+            summary_data = {}
+            for arch, runs in multi_seed_results.items():
+                if not runs:
+                    continue
+                metrics_summary = {}
+                for m in ["f1_macro", "test_acc", "roc_auc", "pr_auc", "sensitivity", "specificity"]:
+                    vals = [r[m] for r in runs]
+                    metrics_summary[m] = {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "values": vals}
+                summary_data[arch] = metrics_summary
+
+            summary_path = os.path.join(results_dir, "multi_seed_summary.json")
+            with open(summary_path, "w") as f:
+                json.dump(summary_data, f, indent=2)
+            print(f"Multi-seed summary saved to: {summary_path}")
 
     print("Done!")
 

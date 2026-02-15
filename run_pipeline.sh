@@ -255,31 +255,7 @@ print_info "Disk usage after download:"
 df -h /ephemeral
 echo ""
 
-################################################################################
-# Final Summary
-################################################################################
-
-print_header "Setup Complete!"
-
-echo ""
-echo -e "${GREEN}All steps completed successfully!${NC}"
-echo ""
-echo -e "${YELLOW}Summary:${NC}"
-echo "  - Overlay disk cleaned"
-echo "  - Cache redirected to /ephemeral"
-echo "  - Dataset downloaded (~77GB)"
-echo "  - Dataset location: ${RAW_DATA}"
-echo ""
-echo -e "${YELLOW}Next steps:${NC}"
-echo "  1. Install requirements:"
-echo "     cd ${PROJECT_ROOT}"
-echo "     pip install -r requirements.txt"
-echo ""
-echo "  2. Run preprocessing:"
-echo "     python3 src/preprocess/preprocess.py"
-echo ""
-echo "  3. Start training:"
-echo "     python3 src/train/train.py"
-echo ""
-echo -e "${BLUE}Happy training! 🚀${NC}"
-echo ""
+pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 && pip install torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
+pip install -r requirements.txt
+python3 src/preprocess/preprocess.py
+python3 src/train/train.py
