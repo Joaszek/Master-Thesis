@@ -258,4 +258,4 @@ echo ""
 pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 && pip install torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
 pip install -r requirements.txt
 python3 src/preprocess/preprocess.py
-python3 src/train/train.py
+python3 src/train/train.py --fresh
