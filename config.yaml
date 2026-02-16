@@ -56,7 +56,7 @@ training:
   oversampling: false      # ignored when balanced_sampling=true, explicit for clarity
   balanced_sampling: true  # Use BalancedBatchSampler instead of WeightedRandomSampler
 
-  seeds: [42, 123, 456, 789, 1024]  # Multi-seed training for statistical significance
+  seeds: [42, 123, 456]  # Multi-seed training for statistical significance
 
   val_ratio: 0.15
   test_ratio: 0.10
