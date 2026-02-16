@@ -311,6 +311,46 @@ def evaluate_with_threshold_search(model, loader, criterion, device, num_classes
     return avg_loss, acc, f1_macro, f1_weighted, preds, all_labels, best_threshold, all_probs
 
 
+@torch.no_grad()
+def evaluate_with_fixed_threshold(model, loader, criterion, device, threshold,
+                                  temperature=1.0):
+    """
+    Evaluate using a FIXED threshold (found on validation set).
+    Optionally applies temperature scaling to logits before softmax.
+
+    This prevents test-set leakage from threshold optimization.
+    """
+    model.eval()
+    all_probs, all_labels = [], []
+    total_loss, n_batches = 0.0, 0
+
+    for batch in loader:
+        batch = batch.to(device)
+        logits = model(batch)
+        loss = criterion(logits, batch.y.squeeze())
+        total_loss += loss.item()
+        n_batches += 1
+
+        # Apply temperature scaling before softmax
+        scaled_logits = logits / temperature
+        probs = torch.softmax(scaled_logits, dim=-1)[:, 1].cpu().numpy()
+        all_probs.extend(probs)
+        all_labels.extend(batch.y.squeeze().cpu().numpy())
+
+    all_probs = np.array(all_probs)
+    all_labels = np.array(all_labels)
+
+    # Apply fixed threshold (no search!)
+    preds = (all_probs >= threshold).astype(int)
+
+    avg_loss = total_loss / max(n_batches, 1)
+    acc = accuracy_score(all_labels, preds)
+    f1_macro = f1_score(all_labels, preds, average="macro", zero_division=0)
+    f1_weighted = f1_score(all_labels, preds, average="weighted", zero_division=0)
+
+    return avg_loss, acc, f1_macro, f1_weighted, preds, all_labels, all_probs
+
+
 
 class BalancedBatchSampler(Sampler):
     """
@@ -682,15 +722,34 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
     print(f"\n[{arch_name}] Final TEST evaluation (best model):")
     model.load_state_dict(torch.load(best_ckpt_path, map_location=device))
 
-    # --- Post-hoc temperature scaling ---
+    # --- Post-hoc temperature scaling (fitted on validation set) ---
     use_calibration = train_cfg.get("calibration", False)
     learned_temp = 1.0
     if use_calibration:
         print(f"\n  [{arch_name}] Fitting temperature scaling on validation set...")
         learned_temp = fit_temperature(model, val_loader, device)
 
-    test_loss, test_acc, test_f1_macro, test_f1_weighted, test_preds, test_labels, test_threshold, test_probs = evaluate_with_threshold_search(
-        model, test_loader, criterion, device, num_classes, fn_cost, fp_cost
+    # --- Find optimal threshold on VALIDATION set (not test!) ---
+    print(f"\n  [{arch_name}] Finding optimal threshold on validation set...")
+    _, val_acc_final, val_f1_final, _, val_preds, val_labels, val_threshold, val_probs = evaluate_with_threshold_search(
+        model, val_loader, criterion, device, num_classes, fn_cost, fp_cost
+    )
+    print(f"    Val threshold: {val_threshold:.4f} | Val F1_macro: {val_f1_final:.4f}")
+
+    # Validation AUC metrics
+    try:
+        val_roc_auc = roc_auc_score(val_labels, val_probs)
+        val_pr_auc = average_precision_score(val_labels, val_probs)
+    except ValueError:
+        val_roc_auc, val_pr_auc = 0.0, 0.0
+
+    val_extra = print_comprehensive_metrics(val_labels, val_preds, val_probs,
+                                            target_names=["Legitimate", "Illicit"])
+
+    # --- Apply FIXED threshold from val to TEST set (no leakage) ---
+    print(f"\n  [{arch_name}] Evaluating test set with fixed threshold={val_threshold:.4f} (from val)")
+    test_loss, test_acc, test_f1_macro, test_f1_weighted, test_preds, test_labels, test_probs = evaluate_with_fixed_threshold(
+        model, test_loader, criterion, device, threshold=val_threshold, temperature=learned_temp
     )
 
     target_names = ["Licit", "Suspicious", "Illicit"] if num_classes == 3 else ["Legitimate", "Illicit"]
@@ -700,14 +759,14 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
     print(f"STANDARD CLASSIFICATION REPORT — {arch_name}")
     print("=" * 100)
     print(classification_report(test_labels, test_preds, target_names=target_names, labels=list(range(num_classes))))
-    print(f"Optimal threshold: {test_threshold:.4f}")
+    print(f"Threshold (from val): {val_threshold:.4f}")
     print(f"Test Loss: {test_loss:.4f} | Accuracy: {test_acc:.2%} | "
           f"F1_macro: {test_f1_macro:.4f} | F1_weighted: {test_f1_weighted:.4f}")
 
     # Comprehensive metrics
     extra = print_comprehensive_metrics(test_labels, test_preds, test_probs, target_names=target_names)
 
-    # AUC metrics
+    # AUC metrics (these are threshold-independent, so no leakage)
     try:
         roc_auc = roc_auc_score(test_labels, test_probs)
         pr_auc = average_precision_score(test_labels, test_probs)
@@ -718,11 +777,12 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         "arch": arch_name,
         "conv_type": conv_type,
         "params": model.count_params(),
+        # Test metrics (threshold from val — no leakage)
         "test_loss": test_loss,
         "test_acc": test_acc,
         "f1_macro": test_f1_macro,
         "f1_weighted": test_f1_weighted,
-        "threshold": test_threshold,
+        "threshold": val_threshold,
         "roc_auc": roc_auc,
         "pr_auc": pr_auc,
         "sensitivity": extra["sensitivity"],
@@ -732,6 +792,14 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         "fn": extra["fn"],
         "tn": extra["tn"],
         "temperature": learned_temp,
+        # Validation metrics (for diagnostic)
+        "val_f1_macro": val_f1_final,
+        "val_acc": val_acc_final,
+        "val_roc_auc": val_roc_auc,
+        "val_pr_auc": val_pr_auc,
+        "val_sensitivity": val_extra["sensitivity"],
+        "val_specificity": val_extra["specificity"],
+        # Predictions for statistical tests
         "test_probs": test_probs.tolist(),
         "test_preds": test_preds.tolist(),
         "test_labels": test_labels.tolist(),
@@ -787,7 +855,7 @@ def print_multi_seed_summary(multi_seed_results):
         for m in metrics:
             vals = [r[m] for r in runs]
             mean_v = np.mean(vals)
-            std_v = np.std(vals)
+            std_v = np.std(vals, ddof=1) if len(vals) > 1 else 0.0
             row += f" | {mean_v:>7.4f}±{std_v:<6.4f}"
         print(row)
 
@@ -992,9 +1060,10 @@ def main():
                 if not runs:
                     continue
                 metrics_summary = {}
-                for m in ["f1_macro", "test_acc", "roc_auc", "pr_auc", "sensitivity", "specificity"]:
+                for m in ["f1_macro", "test_acc", "roc_auc", "pr_auc", "sensitivity", "specificity",
+                          "val_f1_macro", "val_acc", "val_roc_auc", "val_pr_auc", "val_sensitivity", "val_specificity"]:
                     vals = [r[m] for r in runs]
-                    metrics_summary[m] = {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "values": vals}
+                    metrics_summary[m] = {"mean": float(np.mean(vals)), "std": float(np.std(vals, ddof=1) if len(vals) > 1 else 0.0), "values": vals}
                 summary_data[arch] = metrics_summary
 
             summary_path = os.path.join(results_dir, "multi_seed_summary.json")
