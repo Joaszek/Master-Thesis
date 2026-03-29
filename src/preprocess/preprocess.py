@@ -86,6 +86,11 @@ def khop_expand(raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop):
     """
     Expand subgraphs by k hops using background_edges.csv.
 
+    Each subgraph is expanded independently: a node discovered via subgraph A
+    only propagates subgraph A in subsequent hops (not other subgraphs it may
+    also belong to). This prevents unrelated subgraphs from "merging" through
+    shared intermediate nodes.
+
     Args:
         raw_dir: path to raw data directory
         col_cfg: column config from config.yaml
@@ -94,20 +99,26 @@ def khop_expand(raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop):
         k_hop: number of hops to expand
 
     Returns:
-        expansion_nodes: list of (node_id, subgraph_id) tuples for new nodes
+        expansion_nodes: list of (node_id, subgraph_id, hop) tuples for new nodes
         expansion_edges: list of (source, target, txId, subgraph_id) tuples for new edges
+        expanded_node_set: set of all node IDs (original + expanded)
     """
     bg_src_col = col_cfg["background_edges"]["source"]
     bg_dst_col = col_cfg["background_edges"]["target"]
     bg_txid_col = col_cfg["background_edges"]["txId"]
 
-    all_expansion_nodes = []  # (node_id, subgraph_id)
+    all_expansion_nodes = []  # (node_id, subgraph_id, hop)
     all_expansion_edges = []  # (source, target, txId, subgraph_id)
 
     current_node_set = set(node_id_set)
-    current_node_to_sgs = defaultdict(set)
+
+    # Track per-subgraph frontier: which nodes belong to which subgraph.
+    # Unlike the old code that merged all subgraph memberships into one set,
+    # we keep the original membership immutable and only let each subgraph
+    # expand through its own nodes.
+    node_to_sgs = defaultdict(set)
     for nid, sgs in node_to_subgraphs.items():
-        current_node_to_sgs[nid] = set(sgs)
+        node_to_sgs[nid] = set(sgs)
 
     for hop in range(1, k_hop + 1):
         print(f"\n  Hop {hop}/{k_hop}: scanning background_edges.csv...")
@@ -118,7 +129,6 @@ def khop_expand(raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop):
         current_node_list = list(current_node_set)
         bg_edges_lazy = pl.scan_csv(f"{raw_dir}/background_edges.csv")
 
-        # Filter: source OR target is in our node set
         neighbor_edges = (
             bg_edges_lazy
             .filter(
@@ -131,11 +141,14 @@ def khop_expand(raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop):
 
         print(f"    Found {len(neighbor_edges):,} edges touching frontier | {time.time() - t0:.1f}s")
 
-        # Process edges: assign to subgraphs, find new nodes
         BATCH_SIZE = 100_000
         new_nodes_this_hop = set()
         hop_edges = []
         hop_nodes = []
+
+        # Collect new memberships separately, apply after processing all edges
+        # in this hop to avoid order-dependent contamination within a single hop
+        pending_updates = defaultdict(set)  # node_id -> set of sg_ids to add
 
         for batch_start in range(0, len(neighbor_edges), BATCH_SIZE):
             batch = neighbor_edges.slice(batch_start, BATCH_SIZE)
@@ -143,34 +156,37 @@ def khop_expand(raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop):
             for row in batch.iter_rows():
                 src, dst, txid = row[0], row[1], row[2]
 
-                src_sgs = current_node_to_sgs.get(src, set())
-                dst_sgs = current_node_to_sgs.get(dst, set())
+                src_sgs = node_to_sgs.get(src, set())
+                dst_sgs = node_to_sgs.get(dst, set())
 
                 if src_sgs and dst not in current_node_set:
                     # src is in subgraph(s), dst is external -> expand
                     for sg_id in src_sgs:
                         hop_edges.append((src, dst, txid, sg_id))
-                        hop_nodes.append((dst, sg_id))
+                        hop_nodes.append((dst, sg_id, hop))
                     new_nodes_this_hop.add(dst)
-                    current_node_to_sgs[dst].update(src_sgs)
+                    pending_updates[dst].update(src_sgs)
 
                 elif dst_sgs and src not in current_node_set:
                     # dst is in subgraph(s), src is external -> expand
                     for sg_id in dst_sgs:
                         hop_edges.append((src, dst, txid, sg_id))
-                        hop_nodes.append((src, sg_id))
+                        hop_nodes.append((src, sg_id, hop))
                     new_nodes_this_hop.add(src)
-                    current_node_to_sgs[src].update(dst_sgs)
+                    pending_updates[src].update(dst_sgs)
 
                 elif src_sgs and dst_sgs:
-                    # Both endpoints already in our set — edge between known nodes
-                    # Add edge to all subgraphs that both endpoints share
+                    # Both endpoints already in our set
                     shared_sgs = src_sgs & dst_sgs
                     for sg_id in shared_sgs:
                         hop_edges.append((src, dst, txid, sg_id))
 
             if len(hop_edges) > 1_000_000:
                 print(f"    Buffered {len(hop_edges):,} edges, {len(hop_nodes):,} nodes...")
+
+        # Apply pending updates after all edges in this hop are processed
+        for nid, sgs in pending_updates.items():
+            node_to_sgs[nid].update(sgs)
 
         all_expansion_nodes.extend(hop_nodes)
         all_expansion_edges.extend(hop_edges)
@@ -232,6 +248,10 @@ def main():
 
     # Rename to standard names early
     nodes_df = nodes_df.rename({node_id_col: "node_id", node_subgraph_col: "subgraph_id"})
+    nodes_df = nodes_df.with_columns(
+        pl.lit(True).alias("is_original"),
+        pl.lit(0).cast(pl.Int32).alias("hop"),
+    )
     edges_df = edges_df.rename({edge_src_col: "source", edge_dst_col: "target", edge_txid_col: "txId"})
 
     # Label distribution
@@ -264,18 +284,37 @@ def main():
 
         # Add expansion nodes to nodes_df
         if expansion_nodes:
-            exp_nodes_df = pl.DataFrame(
-                {"node_id": [n[0] for n in expansion_nodes],
-                 "subgraph_id": [n[1] for n in expansion_nodes]}
-            ).unique()
+            exp_nodes_df = pl.DataFrame({
+                "node_id": [n[0] for n in expansion_nodes],
+                "subgraph_id": [n[1] for n in expansion_nodes],
+                "is_original": [False] * len(expansion_nodes),
+                "hop": [n[2] for n in expansion_nodes],
+            }).unique(subset=["node_id", "subgraph_id"])
             nodes_df = pl.concat([nodes_df, exp_nodes_df])
             print(f"\n  Expanded nodes: {original_num_nodes:,} -> {len(nodes_df):,} (+{len(nodes_df) - original_num_nodes:,})")
 
-        # Add subgraph_id to original edges using source node lookup
-        src_to_sg = dict(zip(nodes_df["node_id"].to_list(), nodes_df["subgraph_id"].to_list()))
-        edges_df = edges_df.with_columns(
-            pl.col("source").replace(src_to_sg, default=None).alias("subgraph_id")
-        )
+        # Add subgraph_id to original edges using ORIGINAL mapping (before expansion)
+        # A node can belong to multiple subgraphs, so we duplicate edges for each
+        # shared subgraph between source and target
+        orig_edge_rows = []
+        for row in edges_df.iter_rows(named=True):
+            src, dst, txid = row["source"], row["target"], row["txId"]
+            src_sgs = node_to_subgraphs.get(src, set())
+            dst_sgs = node_to_subgraphs.get(dst, set())
+            shared = src_sgs & dst_sgs
+            if shared:
+                for sg_id in shared:
+                    orig_edge_rows.append((src, dst, txid, sg_id))
+            else:
+                # Fallback: use source's subgraph(s) if no overlap
+                for sg_id in src_sgs:
+                    orig_edge_rows.append((src, dst, txid, sg_id))
+        edges_df = pl.DataFrame({
+            "source": [r[0] for r in orig_edge_rows],
+            "target": [r[1] for r in orig_edge_rows],
+            "txId": [r[2] for r in orig_edge_rows],
+            "subgraph_id": [r[3] for r in orig_edge_rows],
+        })
 
         # Add expansion edges
         if expansion_edges:
@@ -293,11 +332,28 @@ def main():
         print("  k_hop=0 — no expansion")
         node_id_set = set(nodes_df["node_id"].to_list())
 
-        # Still add subgraph_id to edges for consistency
-        src_to_sg = dict(zip(nodes_df["node_id"].to_list(), nodes_df["subgraph_id"].to_list()))
-        edges_df = edges_df.with_columns(
-            pl.col("source").replace(src_to_sg, default=None).alias("subgraph_id")
-        )
+        # Add subgraph_id to edges using proper per-subgraph mapping
+        node_to_subgraphs = defaultdict(set)
+        for row in nodes_df.iter_rows(named=True):
+            node_to_subgraphs[row["node_id"]].add(row["subgraph_id"])
+        edge_rows = []
+        for row in edges_df.iter_rows(named=True):
+            src, dst, txid = row["source"], row["target"], row["txId"]
+            src_sgs = node_to_subgraphs.get(src, set())
+            dst_sgs = node_to_subgraphs.get(dst, set())
+            shared = src_sgs & dst_sgs
+            if shared:
+                for sg_id in shared:
+                    edge_rows.append((src, dst, txid, sg_id))
+            else:
+                for sg_id in src_sgs:
+                    edge_rows.append((src, dst, txid, sg_id))
+        edges_df = pl.DataFrame({
+            "source": [r[0] for r in edge_rows],
+            "target": [r[1] for r in edge_rows],
+            "txId": [r[2] for r in edge_rows],
+            "subgraph_id": [r[3] for r in edge_rows],
+        })
 
     # Update ID sets for feature extraction
     node_id_list = list(node_id_set)
@@ -365,9 +421,9 @@ def main():
         print("  Writing components.parquet...")
         components_to_save = components_df.rename({comp_id_col: "subgraph_id", comp_label_col: "label"})
 
-        # Map string labels to int: "licit" -> 0, "suspicious" -> 1, "illicit" -> 2
+        # Map string labels to int: "licit" -> 0, "suspicious" -> 1
         components_to_save = components_to_save.with_columns(
-            pl.col("label").replace({"licit": 0, "suspicious": 1, "illicit": 2})
+            pl.col("label").replace({"licit": 0, "suspicious": 1})
         )
         atomic_write_parquet(components_to_save, components_parquet_path)
 

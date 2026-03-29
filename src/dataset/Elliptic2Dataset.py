@@ -29,7 +29,7 @@ class Elliptic2Dataset(Dataset):
       - x:          node features [num_nodes, node_feat_dim]
       - edge_index: krawędzie [2, num_edges]
       - edge_attr:  edge features [num_edges, edge_feat_dim]
-      - y:          label subgrafu [1]  (binary: 0=legit, 1=illicit)
+      - y:          label subgrafu [1]  (binary: 0=licit, 1=suspicious)
 
     Dane budowane raz i cachowane w all_graphs.pt.
     Split stratyfikowany — proporcje klas zachowane w każdym splicie.
@@ -163,13 +163,15 @@ class Elliptic2Dataset(Dataset):
             [int(x) for x in components_df["label"].to_list()]
         ))
 
-        # subgraph_id -> list of node_ids
+        # subgraph_id -> list of (node_id, is_original)
+        has_is_original = "is_original" in nodes_df.columns
         subgraph_to_nodes = {}
         for row in nodes_df.iter_rows(named=True):
             sg_id = row["subgraph_id"]
+            is_orig = row["is_original"] if has_is_original else True
             if sg_id not in subgraph_to_nodes:
                 subgraph_to_nodes[sg_id] = []
-            subgraph_to_nodes[sg_id].append(row["node_id"])
+            subgraph_to_nodes[sg_id].append((row["node_id"], is_orig))
 
         # subgraph_id -> list of (src, dst, txId)
         subgraph_to_edges = {}
@@ -205,7 +207,9 @@ class Elliptic2Dataset(Dataset):
                 skipped += 1
                 continue
 
-            node_ids_in_sg = subgraph_to_nodes[sg_id]
+            node_entries = subgraph_to_nodes[sg_id]  # list of (node_id, is_original)
+            node_ids_in_sg = [entry[0] for entry in node_entries]
+            is_original_flags = [entry[1] for entry in node_entries]
             edges_in_sg = subgraph_to_edges.get(sg_id, [])
             label = subgraph_labels[sg_id]
 
@@ -217,6 +221,12 @@ class Elliptic2Dataset(Dataset):
             for nid in node_ids_in_sg:
                 x_list.append(node_id_to_features.get(nid, zero_node_feat))
             x = torch.tensor(np.stack(x_list), dtype=torch.float32)
+
+            # is_original mask (1.0 for original, 0.0 for expansion)
+            is_original = torch.tensor(
+                [1.0 if orig else 0.0 for orig in is_original_flags],
+                dtype=torch.float32
+            )
 
             # Edge index + edge features
             edge_index_list = []
@@ -240,7 +250,8 @@ class Elliptic2Dataset(Dataset):
             # Label
             y = torch.tensor([label], dtype=torch.long)
 
-            data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
+            data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y,
+                        is_original=is_original)
             data_list.append(data)
 
         if skipped > 0:

@@ -39,7 +39,7 @@ def ensemble_predict(models, loader, device):
             batch = batch.to(device)
             logits = model(batch)
 
-            # Get probability for positive class (illicit)
+            # Get probability for positive class (suspicious)
             batch_probs = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
             probs.extend(batch_probs)
             labels.extend(batch.y.squeeze().cpu().numpy())

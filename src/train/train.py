@@ -1,6 +1,5 @@
 import os
 import sys
-# Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 import json
 import time
@@ -273,7 +272,7 @@ def evaluate_with_threshold_search(model, loader, criterion, device, num_classes
         total_loss += loss.item()
         n_batches += 1
 
-        # Pobierz probability dla klasy 1 (illicit)
+        # Pobierz probability dla klasy 1 (suspicious)
         probs = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
         all_probs.extend(probs)
         all_labels.extend(batch.y.squeeze().cpu().numpy())
@@ -340,7 +339,7 @@ def evaluate_with_fixed_threshold(model, loader, criterion, device, threshold,
     all_probs = np.array(all_probs)
     all_labels = np.array(all_labels)
 
-    # Apply fixed threshold (no search!)
+    # Apply fixed threshold
     preds = (all_probs >= threshold).astype(int)
 
     avg_loss = total_loss / max(n_batches, 1)
@@ -508,6 +507,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         num_classes=num_classes,
         dropout=config["model"]["dropout"],
         conv_type=conv_type,
+        expansion_node_weight=config["model"].get("expansion_node_weight", 1.0),
     ).to(device)
     print(f"    Parameters: {model.count_params():,}")
 
@@ -729,7 +729,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         print(f"\n  [{arch_name}] Fitting temperature scaling on validation set...")
         learned_temp = fit_temperature(model, val_loader, device)
 
-    # --- Find optimal threshold on VALIDATION set (not test!) ---
+    # --- Find optimal threshold on VALIDATION set
     print(f"\n  [{arch_name}] Finding optimal threshold on validation set...")
     _, val_acc_final, val_f1_final, _, val_preds, val_labels, val_threshold, val_probs = evaluate_with_threshold_search(
         model, val_loader, criterion, device, num_classes, fn_cost, fp_cost
@@ -746,13 +746,13 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
     val_extra = print_comprehensive_metrics(val_labels, val_preds, val_probs,
                                             target_names=["Legitimate", "Illicit"])
 
-    # --- Apply FIXED threshold from val to TEST set (no leakage) ---
+    # --- Apply FIXED threshold from val to TEST set
     print(f"\n  [{arch_name}] Evaluating test set with fixed threshold={val_threshold:.4f} (from val)")
     test_loss, test_acc, test_f1_macro, test_f1_weighted, test_preds, test_labels, test_probs = evaluate_with_fixed_threshold(
         model, test_loader, criterion, device, threshold=val_threshold, temperature=learned_temp
     )
 
-    target_names = ["Licit", "Suspicious", "Illicit"] if num_classes == 3 else ["Legitimate", "Illicit"]
+    target_names = ["Licit", "Suspicious"]
 
     # Standard classification report
     print("\n" + "=" * 100)

@@ -21,6 +21,7 @@ class AttentionPooling(nn.Module):
     """
     Attention-based graph-level pooling.
     Learns importance weights for each node.
+    Supports optional external node weights (e.g., to down-weight expansion nodes).
     """
     def __init__(self, hidden_dim):
         super().__init__()
@@ -30,17 +31,22 @@ class AttentionPooling(nn.Module):
             nn.Linear(hidden_dim // 2, 1)
         )
 
-    def forward(self, x, batch):
+    def forward(self, x, batch, node_weights=None):
         """
         Args:
             x: [num_nodes, hidden_dim] node features
             batch: [num_nodes] batch assignment
+            node_weights: optional [num_nodes, 1] prior weights for each node
 
         Returns:
             [batch_size, hidden_dim] pooled features
         """
         # Compute attention scores
         att_scores = self.att(x)  # [num_nodes, 1]
+
+        # Apply external node weights before softmax (biases attention toward original nodes)
+        if node_weights is not None:
+            att_scores = att_scores + torch.log(node_weights + 1e-8)
 
         # Apply softmax per graph (subtract max for numerical stability)
         max_scores, _ = scatter_max(att_scores, batch, dim=0)  # [num_graphs, 1]
@@ -173,13 +179,15 @@ class EllipticGNN(nn.Module):
     """
 
     def __init__(self, node_feat_dim, edge_feat_dim, hidden_dim, num_layers,
-                 heads, edge_proj_dim, num_classes, dropout, conv_type="gatv2"):
+                 heads, edge_proj_dim, num_classes, dropout, conv_type="gatv2",
+                 expansion_node_weight=1.0):
         super().__init__()
         assert num_layers >= 1
 
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.conv_type = conv_type
+        self.expansion_node_weight = expansion_node_weight
 
         # Edge projection — only needed for gatv2 and sage_edge
         self.uses_edge_features = conv_type in ("gatv2", "sage_edge")
@@ -266,11 +274,25 @@ class EllipticGNN(nn.Module):
             nn.Linear(hidden_dim // 4, num_classes),
         )
 
+    def _compute_node_weights(self, data):
+        """Compute per-node weights based on is_original flag and expansion_node_weight."""
+        if self.expansion_node_weight >= 1.0 or not hasattr(data, "is_original"):
+            return None
+        # weight: 1.0 for original, expansion_node_weight for expansion
+        is_orig = data.is_original  # [num_nodes]
+        weights = torch.where(is_orig > 0.5,
+                              torch.ones_like(is_orig),
+                              torch.full_like(is_orig, self.expansion_node_weight))
+        return weights.unsqueeze(-1)  # [num_nodes, 1]
+
     def forward(self, data):
         x = data.x
         edge_index = data.edge_index
         edge_attr = data.edge_attr
         batch = data.batch
+
+        # Compute node weights for pooling
+        node_weights = self._compute_node_weights(data)
 
         # Project edge features if needed
         if self.uses_edge_features:
@@ -288,9 +310,14 @@ class EllipticGNN(nn.Module):
         # JK aggregation: concatenate all layer outputs and project
         x = self.jk_proj(torch.cat(layer_outputs, dim=-1))
 
-        # Triple pooling: attention + mean + max
-        x_att = self.att_pool(x, batch)
-        x_mean = global_mean_pool(x, batch)
+        # Triple pooling: attention + weighted mean + max
+        x_att = self.att_pool(x, batch, node_weights)
+        if node_weights is not None:
+            # Weighted mean pooling
+            wx = x * node_weights
+            x_mean = scatter_add(wx, batch, dim=0) / (scatter_add(node_weights, batch, dim=0) + 1e-8)
+        else:
+            x_mean = global_mean_pool(x, batch)
         x_max = global_max_pool(x, batch)
         x_pooled = torch.cat((x_att, x_mean, x_max), dim=1)
 
