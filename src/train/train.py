@@ -1,25 +1,21 @@
 import os
 import sys
+
+from train.sampler import BalancedBatchSampler, make_weighted_sampler
+from train.threshold import evaluate_with_threshold_search, evaluate_with_fixed_threshold
+from train.utils import compute_class_weights, build_save_state, atomic_save, print_comprehensive_metrics, load_config, \
+    resolve_paths, set_all_seeds
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 import json
 import time
-import signal
-import shutil
 import argparse
-import yaml
-import tempfile
-
-import random
-
 import torch
-import torch.nn as nn
 import numpy as np
-from torch.utils.data import WeightedRandomSampler, Sampler
 from torch_geometric.loader import DataLoader
 from sklearn.metrics import (
     classification_report, f1_score, accuracy_score,
-    confusion_matrix, roc_auc_score, average_precision_score,
-    precision_score, recall_score
+    roc_auc_score, average_precision_score
 )
 from tqdm import tqdm
 
@@ -27,396 +23,6 @@ from src.dataset.Elliptic2Dataset import Elliptic2Dataset
 from src.models.model import EllipticGNN
 from src.models.losses import FocalLoss
 from src.models.calibration import fit_temperature
-
-
-def set_all_seeds(seed):
-    """Set all random seeds for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
-_GLOBAL_SAVE_STATE = {}
-_SIGTERM_RECEIVED = False
-
-def sigterm_handler(signum, frame):
-    global _SIGTERM_RECEIVED
-    _SIGTERM_RECEIVED = True
-    print("\n" + "=" * 60)
-    print("SIGTERM received — spot instance is shutting down!")
-    print("   Saving checkpoint before exit...")
-    print("=" * 60)
-
-    if _GLOBAL_SAVE_STATE:
-        try:
-            atomic_save(_GLOBAL_SAVE_STATE["state"], _GLOBAL_SAVE_STATE["path"])
-            print(f"   Checkpoint saved to {_GLOBAL_SAVE_STATE['path']}")
-        except Exception as e:
-            print(f"   Failed to save checkpoint: {e}")
-
-    print("   Exiting gracefully.")
-    sys.exit(0)
-
-signal.signal(signal.SIGTERM, sigterm_handler)
-signal.signal(signal.SIGINT, sigterm_handler)
-
-def atomic_save(state, filepath):
-    """
-    Atomic save: pisze do temp file w TYM SAME folderze,
-    potem os.replace() — jeśli pod się zabije mid-write,
-    stary plik przetrwa, .tmp się wymazuje przy restarcie.
-    """
-    dirpath = os.path.dirname(filepath) or "."
-    os.makedirs(dirpath, exist_ok=True)
-
-    # Temp file w tym samym folderze (critical: same filesystem dla atomic replace)
-    fd, tmp_path = tempfile.mkstemp(dir=dirpath, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            torch.save(state, f)
-        # Atomic replace: jeśli to się uda → plik jest kompletny
-        os.replace(tmp_path, filepath)
-    except Exception:
-        # Jeśli coś poszło nie tak → wymazuj .tmp, stary plik bezpieczny
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
-
-def cleanup_tmp_files(dirpath):
-    """Wymazuje stałe pliki .tmp z poprzednich przerwanych sesji."""
-    if not os.path.exists(dirpath):
-        return
-    for f in os.listdir(dirpath):
-        if f.endswith(".tmp"):
-            os.remove(os.path.join(dirpath, f))
-            print(f"  Cleaned up leftover: {f}")
-
-def resolve_paths(config):
-    """
-    Jeśli spot_mode=true → checkpoints i processed data żyją
-    na persistent_storage_path (przetrwa pod restart).
-    """
-    spot_mode = config.get("spot_mode", False)
-    persist = config.get("persistent_storage_path", "/persistent")
-
-    processed_dir = config["data"]["processed_dir"]
-    checkpoint_dir = config["training"]["checkpoint_dir"]
-
-    if spot_mode:
-        # Przekieruj na persistent storage
-        processed_dir = os.path.join(persist, "processed")
-        checkpoint_dir = os.path.join(persist, "checkpoints")
-        print(f"Spot mode ON — paths na persistent storage:")
-        print(f"processed:   {processed_dir}")
-        print(f"checkpoints: {checkpoint_dir}")
-    else:
-        print(f"Standard mode — paths lokalne:")
-        print(f"processed:   {processed_dir}")
-        print(f"checkpoints: {checkpoint_dir}")
-
-    return processed_dir, checkpoint_dir
-
-def load_config():
-    with open("config.yaml") as f:
-        return yaml.safe_load(f)
-
-
-def compute_class_weights(dataset, num_classes, device):
-    """Oblicza inverse-frequency wagi klas z training set."""
-    labels = dataset.get_labels()
-    class_counts = np.bincount(labels, minlength=num_classes).astype(np.float64)
-    total = len(labels)
-
-    # Inverse frequency: w_i = total / (num_classes * count_i)
-    weights = total / (num_classes * class_counts)
-    weights_tensor = torch.tensor(weights, dtype=torch.float32).to(device)
-
-    print(f"    Class counts: {dict(enumerate(class_counts.astype(int)))}")
-    print(f"    Class weights: {dict(enumerate(weights.round(2)))}")
-    return weights_tensor
-
-def print_comprehensive_metrics(y_true, y_pred, y_probs, target_names=None):
-    """
-    Print comprehensive evaluation metrics.
-
-    Args:
-        y_true: True labels
-        y_pred: Predicted labels
-        y_probs: Predicted probabilities for positive class
-        target_names: Class names for display
-    """
-    print("\n" + "=" * 80)
-    print("COMPREHENSIVE EVALUATION METRICS")
-    print("=" * 80)
-
-    # Confusion Matrix
-    cm = confusion_matrix(y_true, y_pred)
-    print("\nConfusion Matrix:")
-    print(f"                 Predicted")
-    print(f"                 Neg    Pos")
-    print(f"  Actual  Neg  [{cm[0,0]:6d}  {cm[0,1]:6d}]")
-    print(f"          Pos  [{cm[1,0]:6d}  {cm[1,1]:6d}]")
-
-    tn, fp, fn, tp = cm.ravel()
-    print(f"\n  True Negatives:  {tn:6d}")
-    print(f"  False Positives: {fp:6d}")
-    print(f"  False Negatives: {fn:6d}")
-    print(f"  True Positives:  {tp:6d}")
-
-    # Per-class metrics
-    print("\nPer-Class Metrics:")
-    precision = precision_score(y_true, y_pred, average=None, zero_division=0)
-    recall_arr = recall_score(y_true, y_pred, average=None, zero_division=0)
-    f1 = f1_score(y_true, y_pred, average=None, zero_division=0)
-
-    if target_names is None:
-        target_names = ["Class 0", "Class 1"]
-
-    for i, name in enumerate(target_names):
-        print(f"  {name:12s}: Precision={precision[i]:.4f}, Recall={recall_arr[i]:.4f}, F1={f1[i]:.4f}")
-
-    # Macro/Weighted averages
-    print("\nAveraged Metrics:")
-    print(f"  Precision (macro):   {precision_score(y_true, y_pred, average='macro', zero_division=0):.4f}")
-    print(f"  Recall (macro):      {recall_score(y_true, y_pred, average='macro', zero_division=0):.4f}")
-    print(f"  F1 (macro):          {f1_score(y_true, y_pred, average='macro', zero_division=0):.4f}")
-    print(f"  F1 (weighted):       {f1_score(y_true, y_pred, average='weighted', zero_division=0):.4f}")
-
-    # ROC-AUC and PR-AUC
-    try:
-        roc_auc = roc_auc_score(y_true, y_probs)
-        pr_auc = average_precision_score(y_true, y_probs)
-        print("\nArea Under Curve Metrics:")
-        print(f"  ROC-AUC:  {roc_auc:.4f}")
-        print(f"  PR-AUC:   {pr_auc:.4f}")
-    except ValueError as e:
-        print(f"\nWarning: Could not compute AUC metrics: {e}")
-
-    # Specificity and Sensitivity
-    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
-    print("\nAdditional Metrics:")
-    print(f"  Specificity (TNR): {specificity:.4f}")
-    print(f"  Sensitivity (TPR): {sensitivity:.4f}")
-    print(f"  Accuracy:          {accuracy_score(y_true, y_pred):.4f}")
-
-    print("=" * 80 + "\n")
-
-    return {
-        "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
-        "specificity": specificity, "sensitivity": sensitivity,
-    }
-
-
-def cost_aware_threshold_search(all_probs, all_labels, fn_cost=10.0, fp_cost=1.0):
-    """
-    Optymalizuj threshold minimalizując total cost.
-
-    Args:
-        all_probs: probabilities dla klasy pozytywnej [N]
-        all_labels: true labels [N]
-        fn_cost: Koszt False Negative (miss fraud)
-        fp_cost: Koszt False Positive (false alarm)
-
-    Returns:
-        best_threshold, best_cost, best_f1
-    """
-    thresholds = np.linspace(0.01, 0.99, 99)
-    best_threshold = 0.5
-    best_cost = float('inf')
-    best_f1 = 0.0
-
-    for thresh in thresholds:
-        preds = (all_probs >= thresh).astype(int)
-
-        # Confusion matrix elements
-        tn = np.sum((all_labels == 0) & (preds == 0))
-        fp = np.sum((all_labels == 0) & (preds == 1))
-        fn = np.sum((all_labels == 1) & (preds == 0))
-        tp = np.sum((all_labels == 1) & (preds == 1))
-
-        total_cost = fn * fn_cost + fp * fp_cost
-        f1 = f1_score(all_labels, preds, average='macro', zero_division=0)
-
-        # Optymalizuj po total cost, f1 jako tiebreaker
-        if total_cost < best_cost or (total_cost == best_cost and f1 > best_f1):
-            best_cost = total_cost
-            best_threshold = thresh
-            best_f1 = f1
-
-    return best_threshold, best_cost, best_f1
-
-
-@torch.no_grad()
-def evaluate_with_threshold_search(model, loader, criterion, device, num_classes=2,
-                                   fn_cost=None, fp_cost=None):
-    """
-    Evaluate z optymalizacją threshold dla klasy pozytywnej.
-
-    Args:
-        fn_cost, fp_cost: Jeśli podane, użyj cost-aware threshold, inaczej max F1-macro
-    """
-    model.eval()
-    all_probs, all_labels = [], []
-    total_loss, n_batches = 0.0, 0
-
-    for batch in loader:
-        batch = batch.to(device)
-        logits = model(batch)
-        loss = criterion(logits, batch.y.squeeze())
-        total_loss += loss.item()
-        n_batches += 1
-
-        # Pobierz probability dla klasy 1 (suspicious)
-        probs = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
-        all_probs.extend(probs)
-        all_labels.extend(batch.y.squeeze().cpu().numpy())
-
-    all_probs = np.array(all_probs)
-    all_labels = np.array(all_labels)
-
-    # Threshold optimization
-    if fn_cost is not None and fp_cost is not None:
-        # Cost-aware threshold
-        best_threshold, total_cost, best_f1 = cost_aware_threshold_search(
-            all_probs, all_labels, fn_cost, fp_cost
-        )
-    else:
-        # F1-macro optimization
-        thresholds = np.linspace(0.01, 0.99, 99)
-        best_threshold = 0.5
-        best_f1 = 0.0
-
-        for thresh in thresholds:
-            preds = (all_probs >= thresh).astype(int)
-            f1 = f1_score(all_labels, preds, average='macro', zero_division=0)
-            if f1 > best_f1:
-                best_f1 = f1
-                best_threshold = thresh
-
-    # Final predictions z optymalnym threshold
-    preds = (all_probs >= best_threshold).astype(int)
-
-    avg_loss = total_loss / max(n_batches, 1)
-    acc = accuracy_score(all_labels, preds)
-    f1_macro = f1_score(all_labels, preds, average="macro", zero_division=0)
-    f1_weighted = f1_score(all_labels, preds, average="weighted", zero_division=0)
-
-    return avg_loss, acc, f1_macro, f1_weighted, preds, all_labels, best_threshold, all_probs
-
-
-@torch.no_grad()
-def evaluate_with_fixed_threshold(model, loader, criterion, device, threshold,
-                                  temperature=1.0):
-    """
-    Evaluate using a FIXED threshold (found on validation set).
-    Optionally applies temperature scaling to logits before softmax.
-
-    This prevents test-set leakage from threshold optimization.
-    """
-    model.eval()
-    all_probs, all_labels = [], []
-    total_loss, n_batches = 0.0, 0
-
-    for batch in loader:
-        batch = batch.to(device)
-        logits = model(batch)
-        loss = criterion(logits, batch.y.squeeze())
-        total_loss += loss.item()
-        n_batches += 1
-
-        # Apply temperature scaling before softmax
-        scaled_logits = logits / temperature
-        probs = torch.softmax(scaled_logits, dim=-1)[:, 1].cpu().numpy()
-        all_probs.extend(probs)
-        all_labels.extend(batch.y.squeeze().cpu().numpy())
-
-    all_probs = np.array(all_probs)
-    all_labels = np.array(all_labels)
-
-    # Apply fixed threshold
-    preds = (all_probs >= threshold).astype(int)
-
-    avg_loss = total_loss / max(n_batches, 1)
-    acc = accuracy_score(all_labels, preds)
-    f1_macro = f1_score(all_labels, preds, average="macro", zero_division=0)
-    f1_weighted = f1_score(all_labels, preds, average="weighted", zero_division=0)
-
-    return avg_loss, acc, f1_macro, f1_weighted, preds, all_labels, all_probs
-
-
-
-class BalancedBatchSampler(Sampler):
-    """
-    Balanced batch sampler — każdy batch ma równą liczbę próbek z każdej klasy.
-    Znacznie bardziej efektywne niż WeightedRandomSampler dla extreme imbalance.
-    """
-    def __init__(self, labels, batch_size, num_batches=None):
-        self.labels = np.array(labels)
-        self.batch_size = batch_size
-        self.num_batches = num_batches
-
-        # Indeksy per klasa
-        self.class_indices = {}
-        for c in np.unique(labels):
-            self.class_indices[c] = np.where(self.labels == c)[0].tolist()
-
-        self.num_classes = len(self.class_indices)
-        self.samples_per_class = batch_size // self.num_classes
-
-        # If num_batches not specified, compute from majority class
-        if self.num_batches is None:
-            max_class_size = max(len(idx) for idx in self.class_indices.values())
-            self.num_batches = max_class_size // self.samples_per_class
-
-    def __iter__(self):
-        # Shuffle indices per class
-        for c in self.class_indices:
-            np.random.shuffle(self.class_indices[c])
-
-        # Pointers per class
-        pointers = {c: 0 for c in self.class_indices}
-
-        for _ in range(self.num_batches):
-            batch = []
-            for c in self.class_indices:
-                indices = self.class_indices[c]
-                n = len(indices)
-
-                # Wrap around if needed (sampling with replacement)
-                selected = []
-                for _ in range(self.samples_per_class):
-                    selected.append(indices[pointers[c] % n])
-                    pointers[c] += 1
-
-                batch.extend(selected)
-
-            # Shuffle batch internally
-            np.random.shuffle(batch)
-            yield batch
-
-    def __len__(self):
-        return self.num_batches
-
-
-def make_weighted_sampler(dataset):
-    """Buduje WeightedRandomSampler — oversampling klasy mniejszościowej."""
-    labels = dataset.get_labels()
-    class_counts = np.bincount(labels)
-
-    # Waga per-sample = 1 / count klasy danej próbki
-    sample_weights = [1.0 / class_counts[l] for l in labels]
-    sampler = WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(labels),
-        replacement=True,
-    )
-    return sampler
 
 
 @torch.no_grad()
@@ -440,18 +46,6 @@ def evaluate(model, loader, criterion, device):
     f1_macro = f1_score(all_labels, all_preds, average="macro", zero_division=0)
     f1_weighted = f1_score(all_labels, all_preds, average="weighted", zero_division=0)
     return avg_loss, acc, f1_macro, f1_weighted, np.array(all_preds), np.array(all_labels)
-
-
-def build_save_state(epoch, model, optimizer, scheduler, best_val_f1, history):
-    """Buduje dict do checkpoint."""
-    return {
-        "epoch": epoch,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "scheduler_state_dict": scheduler.state_dict(),
-        "best_val_f1": best_val_f1,
-        "history": history,
-    }
 
 
 # ============================================================
@@ -478,8 +72,6 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
     Returns:
         dict with test metrics, or None if training failed
     """
-    global _GLOBAL_SAVE_STATE, _SIGTERM_RECEIVED
-
     arch_name = ARCH_NAMES.get(conv_type, conv_type)
     train_cfg = config["training"]
     num_classes = config["model"]["num_classes"]
@@ -487,7 +79,6 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
     # Per-architecture checkpoint directory
     arch_ckpt_dir = os.path.join(checkpoint_dir, conv_type)
     os.makedirs(arch_ckpt_dir, exist_ok=True)
-    cleanup_tmp_files(arch_ckpt_dir)
 
     last_ckpt_path = os.path.join(arch_ckpt_dir, "last_checkpoint.pt")
     best_ckpt_path = os.path.join(arch_ckpt_dir, "best_model.pt")
@@ -624,10 +215,6 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
 
         for epoch in range(start_epoch, epochs):
             final_epoch = epoch
-            _GLOBAL_SAVE_STATE = {
-                "state": build_save_state(epoch - 1 if epoch > 0 else 0, model, optimizer, active_scheduler, best_val_f1, history),
-                "path": last_ckpt_path,
-            }
 
             # Apply warmup LR at start of epoch
             apply_warmup_lr(epoch)
@@ -637,8 +224,6 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
             train_loss_sum, n_batches = 0.0, 0
 
             for batch in tqdm(train_loader, desc=f"[{arch_name}] Epoch {epoch+1}/{epochs}", leave=False):
-                if _SIGTERM_RECEIVED:
-                    break
 
                 batch = batch.to(device)
                 optimizer.zero_grad()
@@ -650,9 +235,6 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
 
                 train_loss_sum += loss.item()
                 n_batches += 1
-
-            if _SIGTERM_RECEIVED:
-                break
 
             avg_train_loss = train_loss_sum / max(n_batches, 1)
 
@@ -693,7 +275,6 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
                 state = build_save_state(epoch, model, optimizer, active_scheduler, best_val_f1, history)
                 state["patience_counter"] = patience_counter
                 atomic_save(state, last_ckpt_path)
-                _GLOBAL_SAVE_STATE = {"state": state, "path": last_ckpt_path}
 
             # --- EARLY STOPPING ---
             if patience_counter >= early_stop_patience:
@@ -785,7 +366,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         "threshold": val_threshold,
         "roc_auc": roc_auc,
         "pr_auc": pr_auc,
-        "sensitivity": extra["sensitivity"],
+        "recall": extra["recall"],
         "specificity": extra["specificity"],
         "tp": extra["tp"],
         "fp": extra["fp"],
@@ -797,7 +378,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
         "val_acc": val_acc_final,
         "val_roc_auc": val_roc_auc,
         "val_pr_auc": val_pr_auc,
-        "val_sensitivity": val_extra["sensitivity"],
+        "val_recall": val_extra["recall"],
         "val_specificity": val_extra["specificity"],
         # Predictions for statistical tests
         "test_probs": test_probs.tolist(),
@@ -820,7 +401,7 @@ def print_comparison_table(results):
 
     for r in results:
         print(f"{r['arch']:<14} | {r['params']:>10,} | {r['test_acc']:>7.2%} | {r['f1_macro']:>8.4f} | "
-              f"{r['f1_weighted']:>7.4f} | {r['sensitivity']:>11.4f} | {r['specificity']:>11.4f} | "
+              f"{r['f1_weighted']:>7.4f} | {r['recall']:>11.4f} | {r['specificity']:>11.4f} | "
               f"{r['tp']:>5} | {r['fp']:>5} | {r['fn']:>5} | {r['tn']:>6} | {r['threshold']:>9.4f}")
 
     print()
@@ -828,9 +409,9 @@ def print_comparison_table(results):
     # Highlight best
     if results:
         best_f1 = max(results, key=lambda x: x["f1_macro"])
-        best_sens = max(results, key=lambda x: x["sensitivity"])
+        best_sens = max(results, key=lambda x: x["recall"])
         print(f"  Best F1 macro:    {best_f1['arch']} ({best_f1['f1_macro']:.4f})")
-        print(f"  Best Sensitivity: {best_sens['arch']} ({best_sens['sensitivity']:.4f})")
+        print(f"  Best Sensitivity: {best_sens['arch']} ({best_sens['recall']:.4f})")
 
     print("#" * 100 + "\n")
 
@@ -841,7 +422,7 @@ def print_multi_seed_summary(multi_seed_results):
     print("#  MULTI-SEED RESULTS (mean ± std)")
     print("#" * 100)
 
-    metrics = ["f1_macro", "test_acc", "roc_auc", "pr_auc", "sensitivity", "specificity", "threshold"]
+    metrics = ["f1_macro", "test_acc", "roc_auc", "pr_auc", "recall", "specificity", "threshold"]
 
     header = f"{'Architecture':<14} | {'Seeds':>5}"
     for m in metrics:
@@ -863,7 +444,6 @@ def print_multi_seed_summary(multi_seed_results):
 
 
 def main():
-    global _GLOBAL_SAVE_STATE, _SIGTERM_RECEIVED
 
     parser = argparse.ArgumentParser(description="Train Elliptic2 GNN — multi-architecture comparison")
     parser.add_argument("--fresh", action="store_true", help="Force fresh start — removes all checkpoints")
@@ -996,9 +576,6 @@ def main():
         seed_ckpt_dir = os.path.join(checkpoint_dir, f"seed_{seed}") if multi_seed else checkpoint_dir
 
         for conv_type in archs_to_run:
-            if _SIGTERM_RECEIVED:
-                print("\nSIGTERM received — stopping before next architecture")
-                break
 
             result = train_and_evaluate(
                 conv_type=conv_type,
@@ -1021,8 +598,6 @@ def main():
             else:
                 print(f"\n  [{ARCH_NAMES[conv_type]}] Training failed — excluded from comparison")
 
-        if _SIGTERM_RECEIVED:
-            break
 
     # --- Summary ---
     total_time = time.time() - total_start
@@ -1060,8 +635,8 @@ def main():
                 if not runs:
                     continue
                 metrics_summary = {}
-                for m in ["f1_macro", "test_acc", "roc_auc", "pr_auc", "sensitivity", "specificity",
-                          "val_f1_macro", "val_acc", "val_roc_auc", "val_pr_auc", "val_sensitivity", "val_specificity"]:
+                for m in ["f1_macro", "test_acc", "roc_auc", "pr_auc", "recall", "specificity",
+                          "val_f1_macro", "val_acc", "val_roc_auc", "val_pr_auc", "val_recall", "val_specificity"]:
                     vals = [r[m] for r in runs]
                     metrics_summary[m] = {"mean": float(np.mean(vals)), "std": float(np.std(vals, ddof=1) if len(vals) > 1 else 0.0), "values": vals}
                 summary_data[arch] = metrics_summary

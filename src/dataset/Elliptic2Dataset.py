@@ -44,10 +44,10 @@ class Elliptic2Dataset(Dataset):
         self.test_ratio = test_ratio
 
         # Load (z cache lub z dysku)
-        all_data = self._get_all_data()
+        all_data = self.get_all_data()
 
         # Stratified split
-        self.data_list = self._stratified_split(all_data)
+        self.data_list = self.stratified_split(all_data)
 
         # Report
         labels = [d.y.item() for d in self.data_list]
@@ -65,7 +65,7 @@ class Elliptic2Dataset(Dataset):
         """Zwraca listę labeli — potrzebne do WeightedRandomSampler."""
         return [d.y.item() for d in self.data_list]
 
-    def _get_all_data(self):
+    def get_all_data(self):
         """Load all graphs — z class cache, .pt pliku, lub buduje od zera."""
         # 1. Class-level RAM cache (dla kolejnych splitów w tym samym procesie)
         if self.processed_dir in Elliptic2Dataset._cache:
@@ -115,7 +115,7 @@ class Elliptic2Dataset(Dataset):
         Elliptic2Dataset._cache[self.processed_dir] = data_list
         return data_list
 
-    def _load_and_build(self):
+    def load_and_build(self):
         """Load parquet files i buduje Data objecty."""
         print("  Loading preprocessed data...")
 
@@ -269,7 +269,7 @@ class Elliptic2Dataset(Dataset):
 
         return data_list
 
-    def _stratified_split(self, data_list):
+    def stratified_split(self, data_list):
         """
         Stratified split zachowujący proporcje klas w train/val/test.
         Deterministyczny (seed=42).

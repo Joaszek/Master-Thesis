@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GATv2Conv, SAGEConv, GINConv, BatchNorm, global_mean_pool, global_max_pool
+from torch_geometric.nn import GATv2Conv, SAGEConv, GINConv, global_mean_pool, global_max_pool
 from torch_scatter import scatter_add, scatter_max, scatter_mean
 
 
@@ -274,7 +274,7 @@ class EllipticGNN(nn.Module):
             nn.Linear(hidden_dim // 4, num_classes),
         )
 
-    def _compute_node_weights(self, data):
+    def compute_node_weights(self, data):
         """Compute per-node weights based on is_original flag and expansion_node_weight."""
         if self.expansion_node_weight >= 1.0 or not hasattr(data, "is_original"):
             return None
@@ -292,7 +292,7 @@ class EllipticGNN(nn.Module):
         batch = data.batch
 
         # Compute node weights for pooling
-        node_weights = self._compute_node_weights(data)
+        node_weights = self.compute_node_weights(data)
 
         # Project edge features if needed
         if self.uses_edge_features:

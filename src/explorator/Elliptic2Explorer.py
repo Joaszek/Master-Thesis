@@ -17,15 +17,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 import warnings
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, Optional
 import json
 from datetime import datetime
-from collections import Counter, defaultdict
-import scipy.stats as stats
 
 warnings.filterwarnings('ignore')
 
-# Konfiguracja wizualizacji
 plt.style.use('seaborn-v0_8-darkgrid')
 sns.set_palette("husl")
 plt.rcParams['figure.figsize'] = (14, 8)
@@ -61,7 +58,6 @@ class Elliptic2Explorer:
     def load_data_sample(
             self,
             sample_fraction: float = 0.01,
-            max_rows: Optional[int] = None
     ) -> Dict[str, pl.DataFrame]:
         """
         Load data with PROPER sampling strategy.
@@ -646,10 +642,10 @@ class Elliptic2Explorer:
         recommendations = []
 
         if total_memory_polars > 40:
-            recommendations.append("⚠️  Use multi-GPU or graph sampling")
-            recommendations.append("⚠️  Consider subgraph sampling (not all 122K at once)")
+            recommendations.append("Use multi-GPU or graph sampling")
+            recommendations.append("Consider subgraph sampling (not all 122K at once)")
         elif total_memory_polars > 20:
-            recommendations.append("⚠️  High-memory GPU recommended (40GB+ VRAM)")
+            recommendations.append("High-memory GPU recommended (40GB+ VRAM)")
             recommendations.append("✓ Polars optimization makes single GPU feasible")
         else:
             recommendations.append("✓ Single GPU with 24GB VRAM should work")
@@ -660,15 +656,14 @@ class Elliptic2Explorer:
 
         # Add edge feature warning
         if n_edge_features > 50:
-            recommendations.append(f"⚠️  {n_edge_features} edge features - consider feature selection")
+            recommendations.append(f"{n_edge_features} edge features - consider feature selection")
 
         analysis['recommendations'] = recommendations
 
         for rec in recommendations:
             print(f"  {rec}")
 
-        # ===== ARCHITECTURE RECOMMENDATIONS =====
-        print(f"\nGNN Architecture Recommendations:")
+        print(f"GNN Architecture Recommendations:")
 
         arch_recs = {
             'primary': [
