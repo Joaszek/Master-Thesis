@@ -66,3 +66,68 @@ training:
   save_every: 1
 
 device: "cuda"
+
+pgd_attack:
+  seed: 42
+  epsilons: [0.01, 0.05, 0.1, 0.2, 0.5]
+  steps: 40
+  restarts: 5
+  step_size: null               # null = auto: 2.5 * epsilon / steps
+  conv_types: [gatv2, sage, sage_edge, gin]
+  output: "data/results/pgd_attack_results.json"
+
+zoo_attack:
+  seed: 42
+  epsilons: [0.05, 0.1, 0.2]
+  delta: 0.01          # finite-difference step size
+  subspace_dim: 10     # feature columns sampled per step (out of 43)
+  step_size: 0.01      # sign-update step size (same role as α in PGD)
+  max_queries: 2000    # oracle query budget per subgraph
+  query_budgets: [100, 250, 500, 1000, 2000]   # ASR@N post-hoc checkpoints
+  conv_types: [gatv2, sage, sage_edge, gin]
+  output: "data/results/zoo_attack_results.json"
+
+node_injection_attack:
+  seed: 42
+  k_nodes: [1, 3, 5, 10]
+  connections_per_node: [1, 2, 3]
+  strategies: [random, degree, mimicry]
+  conv_types: [gatv2, sage, sage_edge, gin]
+  output: "data/results/node_injection_results.json"
+
+topology_rewiring_attack:
+  seed: 42
+  techniques: [peel_chain, star, parallel]
+  k_intermediates: [2, 5, 10]       # peel_chain: chain length | star: hub degree | parallel: n paths
+  conv_types: [gatv2, sage, sage_edge, gin]
+  output: "data/results/topology_rewiring_results.json"
+
+saliency_attack:
+  seed: 42
+  epsilons: [0.1, 0.2]
+  steps: 40
+  restarts: 5
+  top_k_values: [3, 5, 10, 20, 43]
+  saliency_n_samples: 500    # max suspicious-train samples for gradient saliency
+  ig_n_steps: 50             # Riemann sum steps for Integrated Gradients
+  ig_n_samples: 200          # max samples for IG (slower than gradient saliency)
+  ablation_n_samples: 200    # max samples for ablation (O(43 × samples) passes)
+  skip_ablation: false       # set true to skip ablation and save time
+  conv_types: [gatv2, sage, sage_edge, gin]
+  output: "data/results/saliency_attack_results.json"
+  plots_dir: "data/results/plots/saliency"
+
+transfer_attack:
+  seed: 42
+  epsilons: [0.05, 0.1, 0.2]
+  steps: 40
+  restarts: 5
+  step_size: null               # null = auto: 2.5 * epsilon / steps
+  surrogate_hidden_dim: 128
+  surrogate_dropout: 0.3
+  surrogate_epochs: 50
+  surrogate_lr: 0.001
+  surrogate_batch_size: 256
+  surrogate_checkpoint: "checkpoints/surrogate_gcn.pt"
+  cross_arch: true
+  output: "data/results/transfer_attack_results.json"

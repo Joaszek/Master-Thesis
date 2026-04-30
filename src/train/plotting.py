@@ -1,10 +1,3 @@
-"""
-plotting.py — Evaluation curves for GNN model comparison
-=========================================================
-Generates publication-quality PR, ROC, and calibration curves
-with confidence bands from multi-seed runs.
-"""
-
 import json
 import os
 import numpy as np
@@ -17,7 +10,6 @@ from sklearn.metrics import (
 from sklearn.calibration import calibration_curve
 
 
-# Color palette for architectures
 ARCH_COLORS = {
     "GATv2": "#1f77b4",
     "SAGE": "#ff7f0e",
@@ -34,7 +26,6 @@ ARCH_LINESTYLES = {
 
 
 def _group_by_arch(results):
-    """Group results by architecture name."""
     grouped = {}
     for r in results:
         arch = r["arch"]
@@ -45,18 +36,9 @@ def _group_by_arch(results):
 
 
 def plot_roc_curves(results, output_path, with_confidence=True):
-    """
-    Plot ROC curves for all architectures on one figure.
-
-    Args:
-        results: List of result dicts with 'test_probs' and 'test_labels'
-        output_path: Path to save the figure
-        with_confidence: If True, show shaded confidence bands from multi-seed
-    """
     grouped = _group_by_arch(results)
     fig, ax = plt.subplots(1, 1, figsize=(8, 7))
 
-    # Common FPR grid for interpolation
     mean_fpr = np.linspace(0, 1, 200)
 
     for arch, runs in grouped.items():
@@ -72,7 +54,6 @@ def plot_roc_curves(results, output_path, with_confidence=True):
             fpr, tpr, _ = roc_curve(labels, probs)
             auc_val = roc_auc_score(labels, probs)
 
-            # Interpolate onto common grid
             interp_tpr = np.interp(mean_fpr, fpr, tpr)
             interp_tpr[0] = 0.0
             all_tprs.append(interp_tpr)
@@ -113,18 +94,9 @@ def plot_roc_curves(results, output_path, with_confidence=True):
 
 
 def plot_pr_curves(results, output_path, with_confidence=True):
-    """
-    Plot Precision-Recall curves for all architectures on one figure.
-
-    Args:
-        results: List of result dicts with 'test_probs' and 'test_labels'
-        output_path: Path to save the figure
-        with_confidence: If True, show shaded confidence bands from multi-seed
-    """
     grouped = _group_by_arch(results)
     fig, ax = plt.subplots(1, 1, figsize=(8, 7))
 
-    # Common recall grid for interpolation
     mean_recall = np.linspace(0, 1, 200)
 
     for arch, runs in grouped.items():
@@ -140,7 +112,6 @@ def plot_pr_curves(results, output_path, with_confidence=True):
             precision, recall, _ = precision_recall_curve(labels, probs)
             ap = average_precision_score(labels, probs)
 
-            # Interpolate (PR curves go from right to left, so flip)
             interp_precision = np.interp(mean_recall, recall[::-1], precision[::-1])
             all_precisions.append(interp_precision)
             aucs.append(ap)
@@ -163,7 +134,6 @@ def plot_pr_curves(results, output_path, with_confidence=True):
                             np.clip(mean_precision + std_precision, 0, 1),
                             alpha=0.15, color=color)
 
-    # Baseline: prevalence line
     all_labels = np.array(results[0]["test_labels"])
     prevalence = np.mean(all_labels)
     ax.axhline(y=prevalence, color='k', linestyle='--', lw=1, alpha=0.5, label=f'Baseline ({prevalence:.3f})')
@@ -183,14 +153,6 @@ def plot_pr_curves(results, output_path, with_confidence=True):
 
 
 def plot_calibration_curves(results, output_path, n_bins=10):
-    """
-    Plot reliability diagrams (calibration curves) for all architectures.
-
-    Args:
-        results: List of result dicts with 'test_probs' and 'test_labels'
-        output_path: Path to save the figure
-        n_bins: Number of calibration bins
-    """
     grouped = _group_by_arch(results)
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
@@ -201,7 +163,6 @@ def plot_calibration_curves(results, output_path, n_bins=10):
         color = ARCH_COLORS.get(arch, "#333333")
         ls = ARCH_LINESTYLES.get(arch, "-")
 
-        # Use first seed for calibration curve (or average across seeds)
         all_fractions = []
         all_mean_preds = []
 
@@ -215,16 +176,13 @@ def plot_calibration_curves(results, output_path, n_bins=10):
             all_fractions.append(fraction_positives)
             all_mean_preds.append(mean_predicted)
 
-        # Use first run for the plot (multi-seed calibration can vary in bin count)
         ax_cal.plot(all_mean_preds[0], all_fractions[0],
                     color=color, linestyle=ls, lw=2, marker='o', markersize=4,
                     label=arch)
 
-        # Histogram of predicted probabilities
         probs = np.array(runs[0]["test_probs"])
         ax_hist.hist(probs, bins=50, alpha=0.4, color=color, label=arch, density=True)
 
-    # Perfect calibration line
     ax_cal.plot([0, 1], [0, 1], 'k--', lw=1, alpha=0.5, label='Perfect')
     ax_cal.set_xlabel('Mean Predicted Probability', fontsize=12)
     ax_cal.set_ylabel('Fraction of Positives', fontsize=12)
@@ -247,19 +205,12 @@ def plot_calibration_curves(results, output_path, n_bins=10):
 
 
 def generate_all_plots(results_path, output_dir):
-    """
-    Generate all evaluation plots from saved results.
-
-    Args:
-        results_path: Path to full_results.json
-        output_dir: Directory to save plots
-    """
     with open(results_path) as f:
         results = json.load(f)
 
     os.makedirs(output_dir, exist_ok=True)
 
-    print("\nGenerating evaluation plots...")
+    print("\nGenerating evaluation plots")
     plot_roc_curves(results, os.path.join(output_dir, "roc_curves.png"))
     plot_pr_curves(results, os.path.join(output_dir, "pr_curves.png"))
     plot_calibration_curves(results, os.path.join(output_dir, "calibration_curves.png"))

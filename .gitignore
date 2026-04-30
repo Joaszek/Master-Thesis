@@ -1,4 +1,12 @@
 .idea
 checkpoints
-data
+data/processed_k_hop_0
+data/processed_k_hop_1
 dataset
+__pycache__/
+*.pyc
+*.pyo
+.claude/
+.venv/
+*.pt
+*.egg-info/

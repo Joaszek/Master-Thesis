@@ -3,10 +3,6 @@ import numpy as np
 
 
 class BalancedBatchSampler(Sampler):
-    """
-    Balanced batch sampler — każdy batch ma równą liczbę próbek z każdej klasy.
-    Znacznie bardziej efektywne niż WeightedRandomSampler dla extreme imbalance.
-    """
     def __init__(self, labels, batch_size, num_batches=None):
         self.labels = np.array(labels)
         self.batch_size = batch_size
@@ -19,17 +15,14 @@ class BalancedBatchSampler(Sampler):
         self.num_classes = len(self.class_indices)
         self.samples_per_class = batch_size // self.num_classes
 
-        # If num_batches not specified, compute from majority class
         if self.num_batches is None:
             max_class_size = max(len(idx) for idx in self.class_indices.values())
             self.num_batches = max_class_size // self.samples_per_class
 
     def __iter__(self):
-        # Shuffle indices per class
         for c in self.class_indices:
             np.random.shuffle(self.class_indices[c])
 
-        # Pointers per class
         pointers = {c: 0 for c in self.class_indices}
 
         for _ in range(self.num_batches):
@@ -38,7 +31,6 @@ class BalancedBatchSampler(Sampler):
                 indices = self.class_indices[c]
                 n = len(indices)
 
-                # Wrap around if needed (sampling with replacement)
                 selected = []
                 for _ in range(self.samples_per_class):
                     selected.append(indices[pointers[c] % n])
@@ -46,7 +38,6 @@ class BalancedBatchSampler(Sampler):
 
                 batch.extend(selected)
 
-            # Shuffle batch internally
             np.random.shuffle(batch)
             yield batch
 
@@ -55,7 +46,6 @@ class BalancedBatchSampler(Sampler):
 
 
 def make_weighted_sampler(dataset):
-    """Buduje WeightedRandomSampler — oversampling klasy mniejszościowej."""
     labels = dataset.get_labels()
     class_counts = np.bincount(labels)
 

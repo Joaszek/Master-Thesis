@@ -18,11 +18,6 @@ class EdgeProjection(nn.Module):
 
 
 class AttentionPooling(nn.Module):
-    """
-    Attention-based graph-level pooling.
-    Learns importance weights for each node.
-    Supports optional external node weights (e.g., to down-weight expansion nodes).
-    """
     def __init__(self, hidden_dim):
         super().__init__()
         self.att = nn.Sequential(
@@ -32,32 +27,18 @@ class AttentionPooling(nn.Module):
         )
 
     def forward(self, x, batch, node_weights=None):
-        """
-        Args:
-            x: [num_nodes, hidden_dim] node features
-            batch: [num_nodes] batch assignment
-            node_weights: optional [num_nodes, 1] prior weights for each node
+        att_scores = self.att(x)
 
-        Returns:
-            [batch_size, hidden_dim] pooled features
-        """
-        # Compute attention scores
-        att_scores = self.att(x)  # [num_nodes, 1]
-
-        # Apply external node weights before softmax (biases attention toward original nodes)
         if node_weights is not None:
             att_scores = att_scores + torch.log(node_weights + 1e-8)
 
-        # Apply softmax per graph (subtract max for numerical stability)
-        max_scores, _ = scatter_max(att_scores, batch, dim=0)  # [num_graphs, 1]
-        att_scores = att_scores - max_scores[batch]             # broadcast back to nodes
+        max_scores, _ = scatter_max(att_scores, batch, dim=0)
+        att_scores = att_scores - max_scores[batch]
         att_weights = torch.exp(att_scores)
 
-        # Normalize per graph
         sum_weights = scatter_add(att_weights, batch, dim=0)[batch]
         att_weights = att_weights / (sum_weights + 1e-8)
 
-        # Weighted sum
         weighted_x = x * att_weights
         out = scatter_add(weighted_x, batch, dim=0)
 
@@ -91,7 +72,6 @@ class GATv2Block(nn.Module):
 
 
 class SAGEBlock(nn.Module):
-    """Standard GraphSAGE block — no edge features."""
     def __init__(self, in_dim, out_dim, dropout):
         super().__init__()
         self.conv = SAGEConv(in_dim, out_dim)
@@ -108,7 +88,6 @@ class SAGEBlock(nn.Module):
 
 
 class SAGEEdgeBlock(nn.Module):
-    """GraphSAGE block with edge features aggregated and concatenated to node features."""
     def __init__(self, in_dim, edge_dim, out_dim, dropout):
         super().__init__()
         self.conv = SAGEConv(in_dim + edge_dim, out_dim)
@@ -117,7 +96,6 @@ class SAGEEdgeBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, edge_index, edge_attr):
-        # Aggregate edge features to target nodes via mean
         target_nodes = edge_index[1]
         agg_edge = scatter_mean(edge_attr, target_nodes, dim=0, dim_size=x.size(0))
         x_cat = torch.cat([x, agg_edge], dim=-1)
@@ -130,7 +108,6 @@ class SAGEEdgeBlock(nn.Module):
 
 
 class GINBlock(nn.Module):
-    """Graph Isomorphism Network block — maximally expressive GNN baseline."""
     def __init__(self, in_dim, out_dim, dropout):
         super().__init__()
         mlp = nn.Sequential(
@@ -153,31 +130,6 @@ class GINBlock(nn.Module):
 
 
 class EllipticGNN(nn.Module):
-    """
-    Full GNN model: [Edge Projection ->] Conv layers -> JK Aggregation -> Pooling -> MLP Classifier
-
-    Jumping Knowledge (JK) connections: concatenates outputs from ALL conv layers,
-    giving the model a multi-scale view (local features from early layers +
-    global structure from later layers) without adding more layers.
-
-    Supports four conv_type architectures:
-      - "gatv2":     GATv2 with native edge feature support
-      - "sage":      Standard GraphSAGE (no edge features)
-      - "sage_edge": GraphSAGE with edge features aggregated to nodes
-      - "gin":       Graph Isomorphism Network (maximally expressive baseline)
-
-    Args:
-        node_feat_dim:  input node feature dimension
-        edge_feat_dim:  input edge feature dimension
-        hidden_dim:     hidden layer width
-        num_layers:     number of conv layers
-        heads:          multi-head attention heads (only for gatv2)
-        edge_proj_dim:  edge feature projection dimension
-        num_classes:    output classes (2 = binary)
-        dropout:        dropout rate
-        conv_type:      "gatv2", "sage", or "sage_edge"
-    """
-
     def __init__(self, node_feat_dim, edge_feat_dim, hidden_dim, num_layers,
                  heads, edge_proj_dim, num_classes, dropout, conv_type="gatv2",
                  expansion_node_weight=1.0):
@@ -189,7 +141,6 @@ class EllipticGNN(nn.Module):
         self.conv_type = conv_type
         self.expansion_node_weight = expansion_node_weight
 
-        # Edge projection — only needed for gatv2 and sage_edge
         self.uses_edge_features = conv_type in ("gatv2", "sage_edge")
         assert conv_type in ("gatv2", "sage", "sage_edge", "gin"), f"Unknown conv_type: {conv_type}"
         if self.uses_edge_features:
@@ -203,7 +154,6 @@ class EllipticGNN(nn.Module):
             nn.ReLU()
         )
 
-        # Build conv layers based on architecture
         self.conv_layers = nn.ModuleList()
         for _ in range(num_layers):
             if conv_type == "gatv2":
@@ -243,19 +193,15 @@ class EllipticGNN(nn.Module):
                     )
                 )
 
-        # Jumping Knowledge: project concatenated multi-scale features back to hidden_dim
-        # Input: num_layers * hidden_dim (one hidden_dim per layer output)
         self.jk_proj = nn.Sequential(
             nn.Linear(num_layers * hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
         )
 
-        # Triple pooling: attention + mean + max
         self.att_pool = AttentionPooling(hidden_dim)
         self.readout_dim = hidden_dim * 3
 
-        # Classifier with BatchNorm
         self.classifier = nn.Sequential(
             nn.Linear(self.readout_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
@@ -275,15 +221,13 @@ class EllipticGNN(nn.Module):
         )
 
     def compute_node_weights(self, data):
-        """Compute per-node weights based on is_original flag and expansion_node_weight."""
         if self.expansion_node_weight >= 1.0 or not hasattr(data, "is_original"):
             return None
-        # weight: 1.0 for original, expansion_node_weight for expansion
-        is_orig = data.is_original  # [num_nodes]
+        is_orig = data.is_original
         weights = torch.where(is_orig > 0.5,
                               torch.ones_like(is_orig),
                               torch.full_like(is_orig, self.expansion_node_weight))
-        return weights.unsqueeze(-1)  # [num_nodes, 1]
+        return weights.unsqueeze(-1)
 
     def forward(self, data):
         x = data.x
@@ -291,29 +235,23 @@ class EllipticGNN(nn.Module):
         edge_attr = data.edge_attr
         batch = data.batch
 
-        # Compute node weights for pooling
         node_weights = self.compute_node_weights(data)
 
-        # Project edge features if needed
         if self.uses_edge_features:
             edge_attr = self.edge_proj(edge_attr)
 
         x = self.input_proj(x)
 
-        # Collect outputs from each layer for Jumping Knowledge
         layer_outputs = []
         for conv_block in self.conv_layers:
             x_new = conv_block(x, edge_index, edge_attr)
-            x = x + x_new  # residual connection
+            x = x + x_new
             layer_outputs.append(x)
 
-        # JK aggregation: concatenate all layer outputs and project
         x = self.jk_proj(torch.cat(layer_outputs, dim=-1))
 
-        # Triple pooling: attention + weighted mean + max
         x_att = self.att_pool(x, batch, node_weights)
         if node_weights is not None:
-            # Weighted mean pooling
             wx = x * node_weights
             x_mean = scatter_add(wx, batch, dim=0) / (scatter_add(node_weights, batch, dim=0) + 1e-8)
         else:

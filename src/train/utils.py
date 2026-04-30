@@ -120,7 +120,7 @@ def print_comprehensive_metrics(y_true, y_pred, y_probs, target_names=None):
 
     return {
         "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
-        "specificity": specificity, "Recall": Recall,
+        "specificity": specificity, "recall": Recall,
     }
 
 def build_save_state(epoch, model, optimizer, scheduler, best_val_f1, history):

@@ -1,20 +1,11 @@
-"""
-preprocess.py — Elliptic2 Feature Extraction + k-hop Expansion
-===============================================================
-Extracts node/edge features from large background files
-for nodes/edges in labeled subgraphs.
-
-Optionally expands subgraphs by k hops using the background graph,
-giving models more structural context.
-
-Usage:
-    python preprocess.py
-"""
 import os
+import sys
 import time
 import json
 import polars as pl
 from collections import defaultdict
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from preprocess.utils import load_config, resolve_path, atomic_write_parquet, atomic_write_json, khop_expand
 
 
@@ -27,18 +18,14 @@ def main():
 
     total_start = time.time()
 
-    # ================================================================
-    # STEP 1: Load labeled files
-    # ================================================================
     print("\n" + "=" * 60)
-    print("[1/6] Loading labeled subgraph files...")
+    print("[1/6] Loading labeled subgraph files")
     print("=" * 60)
 
     nodes_df = pl.read_csv(f"{raw_dir}/nodes.csv")
     edges_df = pl.read_csv(f"{raw_dir}/edges.csv")
     components_df = pl.read_csv(f"{raw_dir}/connected_components.csv")
 
-    # Column names (hardcoded from config)
     node_id_col = col_cfg["nodes"]["node_id"]
     node_subgraph_col = col_cfg["nodes"]["subgraph_id"]
     edge_src_col = col_cfg["edges"]["source"]
@@ -62,7 +49,6 @@ def main():
     print(f"  edges.csv:                {len(edges_df):>10,} rows")
     print(f"  connected_components.csv: {len(components_df):>10,} rows")
 
-    # Rename to standard names early
     nodes_df = nodes_df.rename({node_id_col: "node_id", node_subgraph_col: "subgraph_id"})
     nodes_df = nodes_df.with_columns(
         pl.lit(True).alias("is_original"),
@@ -70,7 +56,6 @@ def main():
     )
     edges_df = edges_df.rename({edge_src_col: "source", edge_dst_col: "target", edge_txid_col: "txId"})
 
-    # Label distribution
     label_counts = components_df[comp_label_col].value_counts().sort("count", descending=True)
     print(f"\n  Label distribution:")
     for row in label_counts.iter_rows():
@@ -79,15 +64,11 @@ def main():
     original_num_nodes = len(nodes_df)
     original_num_edges = len(edges_df)
 
-    # ================================================================
-    # STEP 2: k-hop expansion (if enabled)
-    # ================================================================
     print("\n" + "=" * 60)
-    print(f"[2/6] k-hop expansion (k={k_hop})...")
+    print(f"[2/6] k-hop expansion (k={k_hop})")
     print("=" * 60)
 
     if k_hop > 0:
-        # Build node -> subgraph mapping
         node_to_subgraphs = defaultdict(set)
         for row in nodes_df.iter_rows(named=True):
             node_to_subgraphs[row["node_id"]].add(row["subgraph_id"])
@@ -98,7 +79,6 @@ def main():
             raw_dir, col_cfg, node_to_subgraphs, node_id_set, k_hop
         )
 
-        # Add expansion nodes to nodes_df
         if expansion_nodes:
             exp_nodes_df = pl.DataFrame({
                 "node_id": [n[0] for n in expansion_nodes],
@@ -109,9 +89,7 @@ def main():
             nodes_df = pl.concat([nodes_df, exp_nodes_df])
             print(f"\n  Expanded nodes: {original_num_nodes:,} -> {len(nodes_df):,} (+{len(nodes_df) - original_num_nodes:,})")
 
-        # Add subgraph_id to original edges using ORIGINAL mapping (before expansion)
-        # A node can belong to multiple subgraphs, so we duplicate edges for each
-        # shared subgraph between source and target
+
         orig_edge_rows = []
         for row in edges_df.iter_rows(named=True):
             src, dst, txid = row["source"], row["target"], row["txId"]
@@ -122,7 +100,6 @@ def main():
                 for sg_id in shared:
                     orig_edge_rows.append((src, dst, txid, sg_id))
             else:
-                # Fallback: use source's subgraph(s) if no overlap
                 for sg_id in src_sgs:
                     orig_edge_rows.append((src, dst, txid, sg_id))
         edges_df = pl.DataFrame({
@@ -132,7 +109,6 @@ def main():
             "subgraph_id": [r[3] for r in orig_edge_rows],
         })
 
-        # Add expansion edges
         if expansion_edges:
             exp_edges_df = pl.DataFrame({
                 "source": [e[0] for e in expansion_edges],
@@ -148,7 +124,6 @@ def main():
         print("  k_hop=0 — no expansion")
         node_id_set = set(nodes_df["node_id"].to_list())
 
-        # Add subgraph_id to edges using proper per-subgraph mapping
         node_to_subgraphs = defaultdict(set)
         for row in nodes_df.iter_rows(named=True):
             node_to_subgraphs[row["node_id"]].add(row["subgraph_id"])
@@ -171,7 +146,6 @@ def main():
             "subgraph_id": [r[3] for r in edge_rows],
         })
 
-    # Update ID sets for feature extraction
     node_id_list = list(node_id_set)
     txid_set = set(edges_df["txId"].to_list())
     txid_list = list(txid_set)
@@ -179,18 +153,14 @@ def main():
     print(f"\n  Final unique nodes to extract: {len(node_id_set):,}")
     print(f"  Final unique txIds to extract: {len(txid_set):,}")
 
-    # ================================================================
-    # STEP 3: Save parquet files (atomic, resume-safe)
-    # ================================================================
     print("\n" + "=" * 60)
-    print("[3/6] Saving parquet files...")
+    print("[3/6] Saving parquet files")
     print("=" * 60)
 
     nodes_parquet_path = f"{out_dir}/nodes.parquet"
     edges_parquet_path = f"{out_dir}/edges.parquet"
     components_parquet_path = f"{out_dir}/components.parquet"
 
-    # Check if k_hop changed — force rewrite
     summary_path = f"{out_dir}/summary.json"
     if os.path.exists(summary_path):
         with open(summary_path) as f:
@@ -204,52 +174,45 @@ def main():
                     os.remove(p)
                     print(f"    removed {p}")
 
-    # nodes.parquet
     if not os.path.exists(nodes_parquet_path):
-        print("\n  Writing nodes.parquet...")
+        print("\n  Writing nodes.parquet")
         atomic_write_parquet(nodes_df, nodes_parquet_path)
     else:
         print("\n  nodes.parquet exists — skipped")
 
-    # edges.parquet
     if os.path.exists(edges_parquet_path):
         _check = pl.read_parquet(edges_parquet_path, n_rows=1)
         if "subgraph_id" not in _check.columns:
-            print("  Old edges.parquet without subgraph_id — removing, rewriting...")
+            print("  Old edges.parquet without subgraph_id — removing, rewriting")
             os.remove(edges_parquet_path)
 
     if not os.path.exists(edges_parquet_path):
-        print("  Writing edges.parquet...")
+        print("  Writing edges.parquet")
         atomic_write_parquet(edges_df, edges_parquet_path)
     else:
         print("  edges.parquet exists — skipped")
 
-    # components.parquet (with int type check)
     if os.path.exists(components_parquet_path):
         _check = pl.read_parquet(components_parquet_path, n_rows=1)
         if _check["label"].dtype not in [pl.Int32, pl.Int64]:
-            print(f"  Old components.parquet with non-int labels ({_check['label'].dtype}) — removing, rewriting...")
+            print(f"  Old components.parquet with non-int labels ({_check['label'].dtype}) — removing, rewriting")
             os.remove(components_parquet_path)
         else:
             print("  components.parquet exists — skipped")
 
     if not os.path.exists(components_parquet_path):
-        print("  Writing components.parquet...")
+        print("  Writing components.parquet")
         components_to_save = components_df.rename({comp_id_col: "subgraph_id", comp_label_col: "label"})
 
-        # Map string labels to int: "licit" -> 0, "suspicious" -> 1
         components_to_save = components_to_save.with_columns(
             pl.col("label").replace({"licit": 0, "suspicious": 1})
         )
         atomic_write_parquet(components_to_save, components_parquet_path)
 
-    # ================================================================
-    # STEP 4: Extract node features from background_nodes.csv
-    # ================================================================
     node_features_path = f"{out_dir}/node_features.parquet"
 
     print("\n" + "=" * 60)
-    print("[4/6] Node features from background_nodes.csv...")
+    print("[4/6] Node features from background_nodes.csv")
     print("=" * 60)
 
     if os.path.exists(node_features_path):
@@ -274,27 +237,24 @@ def main():
         atomic_write_parquet(filtered_node_features, node_features_path)
         print(f"  Saved node_features.parquet")
 
-    # ================================================================
-    # STEP 5: Extract edge features from background_edges.csv
-    # ================================================================
     edge_features_path = f"{out_dir}/edge_features.parquet"
 
     print("\n" + "=" * 60)
-    print("[5/6] Edge features from background_edges.csv...")
+    print("[5/6] Edge features from background_edges.csv")
     print("=" * 60)
 
     if os.path.exists(edge_features_path):
         _check = pl.read_parquet(edge_features_path, n_rows=1)
         if "txId" not in _check.columns:
-            print("  Old edge_features.parquet without txId — removing, re-extracting...")
+            print("  Old edge_features.parquet without txId — removing, re-extracting")
             os.remove(edge_features_path)
         else:
             print("  edge_features.parquet exists — skipped (resume)")
             filtered_edge_features = pl.read_parquet(edge_features_path)
-            edge_feat_dim = len(filtered_edge_features.columns) - 3  # minus txId, source, target
+            edge_feat_dim = len(filtered_edge_features.columns) - 3
 
     if not os.path.exists(edge_features_path):
-        print("  Scanning 77GB file... (2-10 min)")
+        print("  Scanning 77GB file (2-10 min)")
         t0 = time.time()
 
         bg_edges_lazy = pl.scan_csv(f"{raw_dir}/background_edges.csv")
@@ -304,31 +264,27 @@ def main():
         print(f"  background_edges: {len(bg_edges_lazy.collect_schema().names())} columns | "
               f"txId='{bg_txid_col}', src='{bg_src_col}', dst='{bg_dst_col}'")
 
-        # Single filter by txId
         filtered_edge_features = (
             bg_edges_lazy
             .filter(pl.col(bg_txid_col).is_in(txid_list))
             .collect(engine="streaming")
         )
 
-        # Rename to standard names
         filtered_edge_features = filtered_edge_features.rename({
             bg_txid_col: "txId",
             bg_src_col: "source",
             bg_dst_col: "target",
         })
 
-        edge_feat_dim = len(filtered_edge_features.columns) - 3  # minus txId, source, target
+        edge_feat_dim = len(filtered_edge_features.columns) - 3
         print(f"  Extracted: {len(filtered_edge_features):,} edges | {edge_feat_dim} feature dims | {time.time() - t0:.1f}s")
 
         atomic_write_parquet(filtered_edge_features, edge_features_path)
         print(f"  Saved edge_features.parquet")
 
-    # ================================================================
-    # STEP 6: Validation & Summary
-    # ================================================================
+
     print("\n" + "=" * 60)
-    print("[6/6] Validation & Summary...")
+    print("[6/6] Validation & Summary")
     print("=" * 60)
 
     found_nodes = set(filtered_node_features["node_id"].to_list())

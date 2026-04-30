@@ -1,12 +1,14 @@
 import os
 import sys
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.abspath(os.path.join(_HERE, '../..')))  # project root → src.dataset etc.
+sys.path.insert(0, os.path.abspath(os.path.join(_HERE, '..')))     # src/ → train.* etc.
+
 from train.sampler import BalancedBatchSampler, make_weighted_sampler
 from train.threshold import evaluate_with_threshold_search, evaluate_with_fixed_threshold
 from train.utils import compute_class_weights, build_save_state, atomic_save, print_comprehensive_metrics, load_config, \
     resolve_paths, set_all_seeds
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 import json
 import time
 import argparse
@@ -35,11 +37,11 @@ def evaluate(model, loader, criterion, device):
     for batch in loader:
         batch = batch.to(device)
         logits = model(batch)
-        loss = criterion(logits, batch.y.squeeze())
+        loss = criterion(logits, batch.y.view(-1))
         total_loss += loss.item()
         n_batches += 1
         all_preds.extend(logits.argmax(dim=-1).cpu().numpy())
-        all_labels.extend(batch.y.squeeze().cpu().numpy())
+        all_labels.extend(batch.y.view(-1).cpu().numpy())
 
     avg_loss = total_loss / max(n_batches, 1)
     acc = accuracy_score(all_labels, all_preds)
@@ -67,7 +69,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
 
     Args:
         conv_type: "gatv2", "sage", or "sage_edge"
-        ...other shared state...
+        other shared state
 
     Returns:
         dict with test metrics, or None if training failed
@@ -228,7 +230,7 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
                 batch = batch.to(device)
                 optimizer.zero_grad()
                 logits = model(batch)
-                loss = criterion(logits, batch.y.squeeze())
+                loss = criterion(logits, batch.y.view(-1))
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -307,11 +309,11 @@ def train_and_evaluate(conv_type, config, device, train_dataset,
     use_calibration = train_cfg.get("calibration", False)
     learned_temp = 1.0
     if use_calibration:
-        print(f"\n  [{arch_name}] Fitting temperature scaling on validation set...")
+        print(f"\n  [{arch_name}] Fitting temperature scaling on validation set")
         learned_temp = fit_temperature(model, val_loader, device)
 
     # --- Find optimal threshold on VALIDATION set
-    print(f"\n  [{arch_name}] Finding optimal threshold on validation set...")
+    print(f"\n  [{arch_name}] Finding optimal threshold on validation set")
     _, val_acc_final, val_f1_final, _, val_preds, val_labels, val_threshold, val_probs = evaluate_with_threshold_search(
         model, val_loader, criterion, device, num_classes, fn_cost, fp_cost
     )
@@ -495,7 +497,7 @@ def main():
           f"node_feat={node_feat_dim} | edge_feat={edge_feat_dim}")
 
     # --- Load datasets (shared across architectures and seeds) ---
-    print("\nLoading datasets...")
+    print("\nLoading datasets")
     val_ratio = train_cfg["val_ratio"]
     test_ratio = train_cfg["test_ratio"]
 
@@ -530,7 +532,7 @@ def main():
     print(f"\n  Architectures to train: {[ARCH_NAMES[a] for a in archs_to_run]}")
 
     # --- Multi-seed training loop ---
-    # Results: {arch_name: [result_seed1, result_seed2, ...]}
+    # Results: {arch_name: [result_seed1, result_seed2, ]}
     multi_seed_results = {ARCH_NAMES[a]: [] for a in archs_to_run}
     all_results = []  # flat list for backward compatibility
     total_start = time.time()

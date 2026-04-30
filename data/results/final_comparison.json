@@ -1,0 +1,1970 @@
+{
+  "experiment": "final_comparison",
+  "seed": 42,
+  "canonical_configs": {
+    "feature_attacks_epsilon": "0.1",
+    "saliency_top_k": "5",
+    "injection_combo": "random_k3_c1",
+    "topology_combo": "peel_chain_k5"
+  },
+  "statistical_test": {
+    "primary": {
+      "method": "two-proportion z-test (continuity corrected)",
+      "note": "Compares independent ASR proportions. Valid even when models have different TP pools (different subgraphs attacked)."
+    },
+    "supplementary": {
+      "method": "McNemar's chi-squared test (continuity corrected)",
+      "note": "Paired test on the intersection of TP subgraphs. More powerful but limited to shared subgraphs. Requires per_graph data from attack scripts.",
+      "available": true
+    },
+    "bonferroni_alpha": 0.008333,
+    "n_comparisons_per_attack": 6
+  },
+  "significance_tests_zprop": {
+    "pgd": {
+      "GATv2 vs SAGE": {
+        "n1_evaded": 65,
+        "n1_attacked": 213,
+        "asr1": 0.305164,
+        "n2_evaded": 66,
+        "n2_attacked": 210,
+        "asr2": 0.314286,
+        "z_statistic": 0.0977,
+        "p_value": 0.922168,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "n1_evaded": 65,
+        "n1_attacked": 213,
+        "asr1": 0.305164,
+        "n2_evaded": 28,
+        "n2_attacked": 241,
+        "asr2": 0.116183,
+        "z_statistic": 4.8626,
+        "p_value": 1e-06,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "GATv2 vs GIN": {
+        "n1_evaded": 65,
+        "n1_attacked": 213,
+        "asr1": 0.305164,
+        "n2_evaded": 37,
+        "n2_attacked": 245,
+        "asr2": 0.15102,
+        "z_statistic": 3.8421,
+        "p_value": 0.000122,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "n1_evaded": 66,
+        "n1_attacked": 210,
+        "asr1": 0.314286,
+        "n2_evaded": 28,
+        "n2_attacked": 241,
+        "asr2": 0.116183,
+        "z_statistic": 5.0503,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs GIN": {
+        "n1_evaded": 66,
+        "n1_attacked": 210,
+        "asr1": 0.314286,
+        "n2_evaded": 37,
+        "n2_attacked": 245,
+        "asr2": 0.15102,
+        "z_statistic": 4.0362,
+        "p_value": 5.4e-05,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "n1_evaded": 28,
+        "n1_attacked": 241,
+        "asr1": 0.116183,
+        "n2_evaded": 37,
+        "n2_attacked": 245,
+        "asr2": 0.15102,
+        "z_statistic": 0.9949,
+        "p_value": 0.3198,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    },
+    "zoo": {
+      "GATv2 vs SAGE": {
+        "n1_evaded": 28,
+        "n1_attacked": 213,
+        "asr1": 0.131455,
+        "n2_evaded": 25,
+        "n2_attacked": 210,
+        "asr2": 0.119048,
+        "z_statistic": 0.2385,
+        "p_value": 0.811463,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "n1_evaded": 28,
+        "n1_attacked": 213,
+        "asr1": 0.131455,
+        "n2_evaded": 15,
+        "n2_attacked": 241,
+        "asr2": 0.062241,
+        "z_statistic": 2.3529,
+        "p_value": 0.018629,
+        "significant_uncorrected": true,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs GIN": {
+        "n1_evaded": 28,
+        "n1_attacked": 213,
+        "asr1": 0.131455,
+        "n2_evaded": 17,
+        "n2_attacked": 245,
+        "asr2": 0.069388,
+        "z_statistic": 2.0685,
+        "p_value": 0.038598,
+        "significant_uncorrected": true,
+        "significant_bonferroni": false
+      },
+      "SAGE vs SAGE+Edge": {
+        "n1_evaded": 25,
+        "n1_attacked": 210,
+        "asr1": 0.119048,
+        "n2_evaded": 15,
+        "n2_attacked": 241,
+        "asr2": 0.062241,
+        "z_statistic": 1.9507,
+        "p_value": 0.051097,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "SAGE vs GIN": {
+        "n1_evaded": 25,
+        "n1_attacked": 210,
+        "asr1": 0.119048,
+        "n2_evaded": 17,
+        "n2_attacked": 245,
+        "asr2": 0.069388,
+        "z_statistic": 1.6619,
+        "p_value": 0.096534,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "SAGE+Edge vs GIN": {
+        "n1_evaded": 15,
+        "n1_attacked": 241,
+        "asr1": 0.062241,
+        "n2_evaded": 17,
+        "n2_attacked": 245,
+        "asr2": 0.069388,
+        "z_statistic": 0.1347,
+        "p_value": 0.892822,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    },
+    "transfer": {
+      "GATv2 vs SAGE": {
+        "n1_evaded": 67,
+        "n1_attacked": 270,
+        "asr1": 0.248148,
+        "n2_evaded": 70,
+        "n2_attacked": 270,
+        "asr2": 0.259259,
+        "z_statistic": 0.1978,
+        "p_value": 0.843206,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "n1_evaded": 67,
+        "n1_attacked": 270,
+        "asr1": 0.248148,
+        "n2_evaded": 38,
+        "n2_attacked": 270,
+        "asr2": 0.140741,
+        "z_statistic": 3.0445,
+        "p_value": 0.002331,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "GATv2 vs GIN": {
+        "n1_evaded": 67,
+        "n1_attacked": 270,
+        "asr1": 0.248148,
+        "n2_evaded": 31,
+        "n2_attacked": 270,
+        "asr2": 0.114815,
+        "z_statistic": 3.9079,
+        "p_value": 9.3e-05,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "n1_evaded": 70,
+        "n1_attacked": 270,
+        "asr1": 0.259259,
+        "n2_evaded": 38,
+        "n2_attacked": 270,
+        "asr2": 0.140741,
+        "z_statistic": 3.3351,
+        "p_value": 0.000853,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs GIN": {
+        "n1_evaded": 70,
+        "n1_attacked": 270,
+        "asr1": 0.259259,
+        "n2_evaded": 31,
+        "n2_attacked": 270,
+        "asr2": 0.114815,
+        "z_statistic": 4.1936,
+        "p_value": 2.7e-05,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "n1_evaded": 38,
+        "n1_attacked": 270,
+        "asr1": 0.140741,
+        "n2_evaded": 31,
+        "n2_attacked": 270,
+        "asr2": 0.114815,
+        "z_statistic": 0.7734,
+        "p_value": 0.439276,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    },
+    "saliency_grad": {
+      "GATv2 vs SAGE": {
+        "n1_evaded": 21,
+        "n1_attacked": 213,
+        "asr1": 0.098592,
+        "n2_evaded": 21,
+        "n2_attacked": 210,
+        "asr2": 0.1,
+        "z_statistic": 0.0,
+        "p_value": 1.0,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "n1_evaded": 21,
+        "n1_attacked": 213,
+        "asr1": 0.098592,
+        "n2_evaded": 8,
+        "n2_attacked": 241,
+        "asr2": 0.033195,
+        "z_statistic": 2.6514,
+        "p_value": 0.008015,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "GATv2 vs GIN": {
+        "n1_evaded": 21,
+        "n1_attacked": 213,
+        "asr1": 0.098592,
+        "n2_evaded": 8,
+        "n2_attacked": 245,
+        "asr2": 0.032653,
+        "z_statistic": 2.6978,
+        "p_value": 0.00698,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "n1_evaded": 21,
+        "n1_attacked": 210,
+        "asr1": 0.1,
+        "n2_evaded": 8,
+        "n2_attacked": 241,
+        "asr2": 0.033195,
+        "z_statistic": 2.6927,
+        "p_value": 0.007088,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs GIN": {
+        "n1_evaded": 21,
+        "n1_attacked": 210,
+        "asr1": 0.1,
+        "n2_evaded": 8,
+        "n2_attacked": 245,
+        "asr2": 0.032653,
+        "z_statistic": 2.7392,
+        "p_value": 0.006159,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "n1_evaded": 8,
+        "n1_attacked": 241,
+        "asr1": 0.033195,
+        "n2_evaded": 8,
+        "n2_attacked": 245,
+        "asr2": 0.032653,
+        "z_statistic": 0.0,
+        "p_value": 1.0,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    },
+    "saliency_ig": {
+      "GATv2 vs SAGE": {
+        "n1_evaded": 7,
+        "n1_attacked": 213,
+        "asr1": 0.032864,
+        "n2_evaded": 4,
+        "n2_attacked": 210,
+        "asr2": 0.019048,
+        "z_statistic": 0.5872,
+        "p_value": 0.557069,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "n1_evaded": 7,
+        "n1_attacked": 213,
+        "asr1": 0.032864,
+        "n2_evaded": 2,
+        "n2_attacked": 241,
+        "asr2": 0.008299,
+        "z_statistic": 1.5366,
+        "p_value": 0.124402,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs GIN": {
+        "n1_evaded": 7,
+        "n1_attacked": 213,
+        "asr1": 0.032864,
+        "n2_evaded": 1,
+        "n2_attacked": 245,
+        "asr2": 0.004082,
+        "z_statistic": 1.9876,
+        "p_value": 0.046852,
+        "significant_uncorrected": true,
+        "significant_bonferroni": false
+      },
+      "SAGE vs SAGE+Edge": {
+        "n1_evaded": 4,
+        "n1_attacked": 210,
+        "asr1": 0.019048,
+        "n2_evaded": 2,
+        "n2_attacked": 241,
+        "asr2": 0.008299,
+        "z_statistic": 0.5819,
+        "p_value": 0.560656,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "SAGE vs GIN": {
+        "n1_evaded": 4,
+        "n1_attacked": 210,
+        "asr1": 0.019048,
+        "n2_evaded": 1,
+        "n2_attacked": 245,
+        "asr2": 0.004082,
+        "z_statistic": 1.0755,
+        "p_value": 0.282139,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "SAGE+Edge vs GIN": {
+        "n1_evaded": 2,
+        "n1_attacked": 241,
+        "asr1": 0.008299,
+        "n2_evaded": 1,
+        "n2_attacked": 245,
+        "asr2": 0.004082,
+        "z_statistic": 0.0143,
+        "p_value": 0.98859,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    },
+    "injection": {
+      "GATv2 vs SAGE": {
+        "n1_evaded": 89,
+        "n1_attacked": 213,
+        "asr1": 0.41784,
+        "n2_evaded": 83,
+        "n2_attacked": 210,
+        "asr2": 0.395238,
+        "z_statistic": 0.3742,
+        "p_value": 0.708266,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "n1_evaded": 89,
+        "n1_attacked": 213,
+        "asr1": 0.41784,
+        "n2_evaded": 78,
+        "n2_attacked": 241,
+        "asr2": 0.323651,
+        "z_statistic": 1.9794,
+        "p_value": 0.047766,
+        "significant_uncorrected": true,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs GIN": {
+        "n1_evaded": 89,
+        "n1_attacked": 213,
+        "asr1": 0.41784,
+        "n2_evaded": 56,
+        "n2_attacked": 245,
+        "asr2": 0.228571,
+        "z_statistic": 4.2427,
+        "p_value": 2.2e-05,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "n1_evaded": 83,
+        "n1_attacked": 210,
+        "asr1": 0.395238,
+        "n2_evaded": 78,
+        "n2_attacked": 241,
+        "asr2": 0.323651,
+        "z_statistic": 1.4843,
+        "p_value": 0.137733,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "SAGE vs GIN": {
+        "n1_evaded": 83,
+        "n1_attacked": 210,
+        "asr1": 0.395238,
+        "n2_evaded": 56,
+        "n2_attacked": 245,
+        "asr2": 0.228571,
+        "z_statistic": 3.7456,
+        "p_value": 0.00018,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "n1_evaded": 78,
+        "n1_attacked": 241,
+        "asr1": 0.323651,
+        "n2_evaded": 56,
+        "n2_attacked": 245,
+        "asr2": 0.228571,
+        "z_statistic": 2.2437,
+        "p_value": 0.024854,
+        "significant_uncorrected": true,
+        "significant_bonferroni": false
+      }
+    },
+    "rewiring": {
+      "GATv2 vs SAGE": {
+        "n1_evaded": 106,
+        "n1_attacked": 213,
+        "asr1": 0.497653,
+        "n2_evaded": 86,
+        "n2_attacked": 210,
+        "asr2": 0.409524,
+        "z_statistic": 1.7226,
+        "p_value": 0.084963,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "n1_evaded": 106,
+        "n1_attacked": 213,
+        "asr1": 0.497653,
+        "n2_evaded": 75,
+        "n2_attacked": 241,
+        "asr2": 0.311203,
+        "z_statistic": 3.9531,
+        "p_value": 7.7e-05,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "GATv2 vs GIN": {
+        "n1_evaded": 106,
+        "n1_attacked": 213,
+        "asr1": 0.497653,
+        "n2_evaded": 68,
+        "n2_attacked": 245,
+        "asr2": 0.277551,
+        "z_statistic": 4.744,
+        "p_value": 2e-06,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "n1_evaded": 86,
+        "n1_attacked": 210,
+        "asr1": 0.409524,
+        "n2_evaded": 75,
+        "n2_attacked": 241,
+        "asr2": 0.311203,
+        "z_statistic": 2.0754,
+        "p_value": 0.037951,
+        "significant_uncorrected": true,
+        "significant_bonferroni": false
+      },
+      "SAGE vs GIN": {
+        "n1_evaded": 86,
+        "n1_attacked": 210,
+        "asr1": 0.409524,
+        "n2_evaded": 68,
+        "n2_attacked": 245,
+        "asr2": 0.277551,
+        "z_statistic": 2.8664,
+        "p_value": 0.004152,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "n1_evaded": 75,
+        "n1_attacked": 241,
+        "asr1": 0.311203,
+        "n2_evaded": 68,
+        "n2_attacked": 245,
+        "asr2": 0.277551,
+        "z_statistic": 0.7144,
+        "p_value": 0.474963,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    }
+  },
+  "significance_tests_mcnemar": {
+    "pgd": {
+      "GATv2 vs SAGE": {
+        "intersection_size": 192,
+        "b": 13,
+        "c": 12,
+        "chi2": 0.0,
+        "p_value": 1.0,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 46,
+        "c": 5,
+        "chi2": 31.3725,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "GATv2 vs GIN": {
+        "intersection_size": 211,
+        "b": 46,
+        "c": 6,
+        "chi2": 29.25,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 53,
+        "c": 4,
+        "chi2": 40.4211,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs GIN": {
+        "intersection_size": 206,
+        "b": 47,
+        "c": 4,
+        "chi2": 34.5882,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "intersection_size": 230,
+        "b": 12,
+        "c": 18,
+        "chi2": 0.8333,
+        "p_value": 0.36131,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    },
+    "zoo": {
+      "GATv2 vs SAGE": {
+        "intersection_size": 192,
+        "b": 13,
+        "c": 9,
+        "chi2": 0.4091,
+        "p_value": 0.522431,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 21,
+        "c": 7,
+        "chi2": 6.0357,
+        "p_value": 0.014019,
+        "significant_uncorrected": true,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs GIN": {
+        "intersection_size": 211,
+        "b": 25,
+        "c": 7,
+        "chi2": 9.0312,
+        "p_value": 0.002654,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 22,
+        "c": 4,
+        "chi2": 11.1154,
+        "p_value": 0.000856,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs GIN": {
+        "intersection_size": 206,
+        "b": 20,
+        "c": 4,
+        "chi2": 9.375,
+        "p_value": 0.0022,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "intersection_size": 230,
+        "b": 8,
+        "c": 9,
+        "chi2": 0.0,
+        "p_value": 1.0,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    },
+    "transfer": {
+      "GATv2 vs SAGE": {
+        "intersection_size": 270,
+        "b": 20,
+        "c": 23,
+        "chi2": 0.093,
+        "p_value": 0.760368,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "intersection_size": 270,
+        "b": 39,
+        "c": 10,
+        "chi2": 16.0,
+        "p_value": 6.3e-05,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "GATv2 vs GIN": {
+        "intersection_size": 270,
+        "b": 41,
+        "c": 5,
+        "chi2": 26.6304,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "intersection_size": 270,
+        "b": 40,
+        "c": 8,
+        "chi2": 20.0208,
+        "p_value": 8e-06,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs GIN": {
+        "intersection_size": 270,
+        "b": 44,
+        "c": 5,
+        "chi2": 29.4694,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "intersection_size": 270,
+        "b": 18,
+        "c": 11,
+        "chi2": 1.2414,
+        "p_value": 0.265205,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    },
+    "saliency_grad": {
+      "GATv2 vs SAGE": {
+        "intersection_size": 192,
+        "b": 8,
+        "c": 7,
+        "chi2": 0.0,
+        "p_value": 1.0,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 16,
+        "c": 2,
+        "chi2": 9.3889,
+        "p_value": 0.002183,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "GATv2 vs GIN": {
+        "intersection_size": 211,
+        "b": 19,
+        "c": 3,
+        "chi2": 10.2273,
+        "p_value": 0.001384,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 19,
+        "c": 2,
+        "chi2": 12.1905,
+        "p_value": 0.00048,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs GIN": {
+        "intersection_size": 206,
+        "b": 16,
+        "c": 2,
+        "chi2": 9.3889,
+        "p_value": 0.002183,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "intersection_size": 230,
+        "b": 4,
+        "c": 4,
+        "chi2": 0.125,
+        "p_value": 0.723674,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    },
+    "saliency_ig": {
+      "GATv2 vs SAGE": {
+        "intersection_size": 192,
+        "b": 3,
+        "c": 2,
+        "chi2": 0.0,
+        "p_value": 1.0,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 5,
+        "c": 0,
+        "chi2": 3.2,
+        "p_value": 0.073638,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs GIN": {
+        "intersection_size": 211,
+        "b": 7,
+        "c": 1,
+        "chi2": 3.125,
+        "p_value": 0.0771,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "SAGE vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 4,
+        "c": 0,
+        "chi2": 2.25,
+        "p_value": 0.133614,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "SAGE vs GIN": {
+        "intersection_size": 206,
+        "b": 4,
+        "c": 1,
+        "chi2": 0.8,
+        "p_value": 0.371093,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "SAGE+Edge vs GIN": {
+        "intersection_size": 230,
+        "b": 1,
+        "c": 1,
+        "chi2": 0.5,
+        "p_value": 0.4795,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    },
+    "injection": {
+      "GATv2 vs SAGE": {
+        "intersection_size": 192,
+        "b": 31,
+        "c": 24,
+        "chi2": 0.6545,
+        "p_value": 0.418492,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 38,
+        "c": 12,
+        "chi2": 12.5,
+        "p_value": 0.000407,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "GATv2 vs GIN": {
+        "intersection_size": 211,
+        "b": 56,
+        "c": 10,
+        "chi2": 30.6818,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 40,
+        "c": 12,
+        "chi2": 14.0192,
+        "p_value": 0.000181,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs GIN": {
+        "intersection_size": 206,
+        "b": 50,
+        "c": 7,
+        "chi2": 30.9474,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "intersection_size": 230,
+        "b": 40,
+        "c": 16,
+        "chi2": 9.4464,
+        "p_value": 0.002116,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      }
+    },
+    "rewiring": {
+      "GATv2 vs SAGE": {
+        "intersection_size": 192,
+        "b": 33,
+        "c": 16,
+        "chi2": 5.2245,
+        "p_value": 0.022271,
+        "significant_uncorrected": true,
+        "significant_bonferroni": false
+      },
+      "GATv2 vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 52,
+        "c": 9,
+        "chi2": 28.918,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "GATv2 vs GIN": {
+        "intersection_size": 211,
+        "b": 62,
+        "c": 7,
+        "chi2": 42.2609,
+        "p_value": 0.0,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs SAGE+Edge": {
+        "intersection_size": 203,
+        "b": 45,
+        "c": 16,
+        "chi2": 12.8525,
+        "p_value": 0.000337,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE vs GIN": {
+        "intersection_size": 206,
+        "b": 52,
+        "c": 13,
+        "chi2": 22.2154,
+        "p_value": 2e-06,
+        "significant_uncorrected": true,
+        "significant_bonferroni": true
+      },
+      "SAGE+Edge vs GIN": {
+        "intersection_size": 230,
+        "b": 32,
+        "c": 18,
+        "chi2": 3.38,
+        "p_value": 0.065992,
+        "significant_uncorrected": false,
+        "significant_bonferroni": false
+      }
+    }
+  },
+  "models": {
+    "gatv2": {
+      "display_name": "GATv2",
+      "baseline_f1_macro": 0.9182283044398788,
+      "baseline_f1_std": 0.0201776003369353,
+      "mean_asr_all": 0.2474,
+      "mean_asr_feature": 0.1632,
+      "mean_asr_struct": 0.4577,
+      "robustness_rank": 4,
+      "attacks": {
+        "pgd": {
+          "asr": 0.3052,
+          "f1_drop": 0.0867,
+          "budget": 0.1,
+          "n_evaded": 65,
+          "n_attacked": 213,
+          "asr_ci_lo": 0.2441,
+          "asr_ci_hi": 0.3662,
+          "max_asr": 0.8779
+        },
+        "zoo": {
+          "asr": 0.1315,
+          "f1_drop": 0.0345,
+          "budget": 0.1,
+          "n_evaded": 28,
+          "n_attacked": 213,
+          "asr_ci_lo": 0.0892,
+          "asr_ci_hi": 0.1784,
+          "max_asr": 0.2629
+        },
+        "transfer": {
+          "asr": 0.2481,
+          "f1_drop": 0.0083,
+          "budget": 0.1,
+          "n_evaded": 67,
+          "n_attacked": 270,
+          "asr_ci_lo": 0.1963,
+          "asr_ci_hi": 0.3,
+          "max_asr": 0.3185
+        },
+        "saliency_grad": {
+          "asr": 0.0986,
+          "f1_drop": 0.0255,
+          "budget": 0.1,
+          "n_evaded": 21,
+          "n_attacked": 213,
+          "asr_ci_lo": 0.061,
+          "asr_ci_hi": 0.1408,
+          "max_asr": 0.554
+        },
+        "saliency_ig": {
+          "asr": 0.0329,
+          "f1_drop": 0.0083,
+          "budget": 0.1,
+          "n_evaded": 7,
+          "n_attacked": 213,
+          "asr_ci_lo": 0.0094,
+          "asr_ci_hi": 0.0563,
+          "max_asr": 0.5399
+        },
+        "injection": {
+          "asr": 0.4178,
+          "f1_drop": 0.1254,
+          "budget": 3.0,
+          "n_evaded": 89,
+          "n_attacked": 213,
+          "asr_ci_lo": 0.3521,
+          "asr_ci_hi": 0.4836,
+          "max_asr": 0.7606
+        },
+        "rewiring": {
+          "asr": 0.4977,
+          "f1_drop": 0.1557,
+          "budget": 11.0,
+          "n_evaded": 106,
+          "n_attacked": 213,
+          "asr_ci_lo": 0.4319,
+          "asr_ci_hi": 0.5634,
+          "max_asr": 0.6526
+        }
+      }
+    },
+    "sage": {
+      "display_name": "SAGE",
+      "baseline_f1_macro": 0.9382636271181158,
+      "baseline_f1_std": 0.011160871796393678,
+      "mean_asr_all": 0.2309,
+      "mean_asr_feature": 0.1623,
+      "mean_asr_struct": 0.4024,
+      "robustness_rank": 3,
+      "attacks": {
+        "pgd": {
+          "asr": 0.3143,
+          "f1_drop": 0.0895,
+          "budget": 0.1,
+          "n_evaded": 66,
+          "n_attacked": 210,
+          "asr_ci_lo": 0.2524,
+          "asr_ci_hi": 0.381,
+          "max_asr": 0.5238
+        },
+        "zoo": {
+          "asr": 0.119,
+          "f1_drop": 0.031,
+          "budget": 0.1,
+          "n_evaded": 25,
+          "n_attacked": 210,
+          "asr_ci_lo": 0.0762,
+          "asr_ci_hi": 0.1667,
+          "max_asr": 0.2476
+        },
+        "transfer": {
+          "asr": 0.2593,
+          "f1_drop": 0.0084,
+          "budget": 0.1,
+          "n_evaded": 70,
+          "n_attacked": 270,
+          "asr_ci_lo": 0.2074,
+          "asr_ci_hi": 0.3111,
+          "max_asr": 0.337
+        },
+        "saliency_grad": {
+          "asr": 0.1,
+          "f1_drop": 0.0258,
+          "budget": 0.1,
+          "n_evaded": 21,
+          "n_attacked": 210,
+          "asr_ci_lo": 0.0619,
+          "asr_ci_hi": 0.1429,
+          "max_asr": 0.419
+        },
+        "saliency_ig": {
+          "asr": 0.019,
+          "f1_drop": 0.0048,
+          "budget": 0.1,
+          "n_evaded": 4,
+          "n_attacked": 210,
+          "asr_ci_lo": 0.0048,
+          "asr_ci_hi": 0.0381,
+          "max_asr": 0.4238
+        },
+        "injection": {
+          "asr": 0.3952,
+          "f1_drop": 0.1171,
+          "budget": 3.0,
+          "n_evaded": 83,
+          "n_attacked": 210,
+          "asr_ci_lo": 0.3286,
+          "asr_ci_hi": 0.4619,
+          "max_asr": 0.6714
+        },
+        "rewiring": {
+          "asr": 0.4095,
+          "f1_drop": 0.1222,
+          "budget": 11.0,
+          "n_evaded": 86,
+          "n_attacked": 210,
+          "asr_ci_lo": 0.3429,
+          "asr_ci_hi": 0.4762,
+          "max_asr": 0.581
+        }
+      }
+    },
+    "sage_edge": {
+      "display_name": "SAGE+Edge",
+      "baseline_f1_macro": 0.9543465261376589,
+      "baseline_f1_std": 0.003102952807016328,
+      "mean_asr_all": 0.1422,
+      "mean_asr_feature": 0.0721,
+      "mean_asr_struct": 0.3174,
+      "robustness_rank": 2,
+      "attacks": {
+        "pgd": {
+          "asr": 0.1162,
+          "f1_drop": 0.031,
+          "budget": 0.1,
+          "n_evaded": 28,
+          "n_attacked": 241,
+          "asr_ci_lo": 0.0788,
+          "asr_ci_hi": 0.1577,
+          "max_asr": 0.2407
+        },
+        "zoo": {
+          "asr": 0.0622,
+          "f1_drop": 0.0162,
+          "budget": 0.1,
+          "n_evaded": 15,
+          "n_attacked": 241,
+          "asr_ci_lo": 0.0332,
+          "asr_ci_hi": 0.0954,
+          "max_asr": 0.1162
+        },
+        "transfer": {
+          "asr": 0.1407,
+          "f1_drop": 0.0074,
+          "budget": 0.1,
+          "n_evaded": 38,
+          "n_attacked": 270,
+          "asr_ci_lo": 0.1,
+          "asr_ci_hi": 0.1852,
+          "max_asr": 0.1889
+        },
+        "saliency_grad": {
+          "asr": 0.0332,
+          "f1_drop": 0.0085,
+          "budget": 0.1,
+          "n_evaded": 8,
+          "n_attacked": 241,
+          "asr_ci_lo": 0.0124,
+          "asr_ci_hi": 0.0581,
+          "max_asr": 0.195
+        },
+        "saliency_ig": {
+          "asr": 0.0083,
+          "f1_drop": 0.0021,
+          "budget": 0.1,
+          "n_evaded": 2,
+          "n_attacked": 241,
+          "asr_ci_lo": 0.0,
+          "asr_ci_hi": 0.0207,
+          "max_asr": 0.1909
+        },
+        "injection": {
+          "asr": 0.3237,
+          "f1_drop": 0.0955,
+          "budget": 3.0,
+          "n_evaded": 78,
+          "n_attacked": 241,
+          "asr_ci_lo": 0.2656,
+          "asr_ci_hi": 0.3817,
+          "max_asr": 0.7469
+        },
+        "rewiring": {
+          "asr": 0.3112,
+          "f1_drop": 0.0913,
+          "budget": 11.0,
+          "n_evaded": 75,
+          "n_attacked": 241,
+          "asr_ci_lo": 0.2531,
+          "asr_ci_hi": 0.3693,
+          "max_asr": 0.4066
+        }
+      }
+    },
+    "gin": {
+      "display_name": "GIN",
+      "baseline_f1_macro": 0.9572516050861603,
+      "baseline_f1_std": 0.003366674545690711,
+      "mean_asr_all": 0.1254,
+      "mean_asr_feature": 0.0744,
+      "mean_asr_struct": 0.2531,
+      "robustness_rank": 1,
+      "attacks": {
+        "pgd": {
+          "asr": 0.151,
+          "f1_drop": 0.041,
+          "budget": 0.1,
+          "n_evaded": 37,
+          "n_attacked": 245,
+          "asr_ci_lo": 0.1061,
+          "asr_ci_hi": 0.1959,
+          "max_asr": 0.3837
+        },
+        "zoo": {
+          "asr": 0.0694,
+          "f1_drop": 0.0181,
+          "budget": 0.1,
+          "n_evaded": 17,
+          "n_attacked": 245,
+          "asr_ci_lo": 0.0408,
+          "asr_ci_hi": 0.102,
+          "max_asr": 0.151
+        },
+        "transfer": {
+          "asr": 0.1148,
+          "f1_drop": 0.0031,
+          "budget": 0.1,
+          "n_evaded": 31,
+          "n_attacked": 270,
+          "asr_ci_lo": 0.0778,
+          "asr_ci_hi": 0.1556,
+          "max_asr": 0.1667
+        },
+        "saliency_grad": {
+          "asr": 0.0327,
+          "f1_drop": 0.0084,
+          "budget": 0.1,
+          "n_evaded": 8,
+          "n_attacked": 245,
+          "asr_ci_lo": 0.0122,
+          "asr_ci_hi": 0.0571,
+          "max_asr": 0.2939
+        },
+        "saliency_ig": {
+          "asr": 0.0041,
+          "f1_drop": 0.001,
+          "budget": 0.1,
+          "n_evaded": 1,
+          "n_attacked": 245,
+          "asr_ci_lo": 0.0,
+          "asr_ci_hi": 0.0122,
+          "max_asr": 0.298
+        },
+        "injection": {
+          "asr": 0.2286,
+          "f1_drop": 0.0645,
+          "budget": 3.0,
+          "n_evaded": 56,
+          "n_attacked": 245,
+          "asr_ci_lo": 0.1755,
+          "asr_ci_hi": 0.2816,
+          "max_asr": 0.6776
+        },
+        "rewiring": {
+          "asr": 0.2776,
+          "f1_drop": 0.0803,
+          "budget": 11.0,
+          "n_evaded": 68,
+          "n_attacked": 245,
+          "asr_ci_lo": 0.2204,
+          "asr_ci_hi": 0.3347,
+          "max_asr": 0.3633
+        }
+      }
+    }
+  },
+  "attack_ranking": {
+    "pgd": {
+      "label": "PGD (white-box)",
+      "mean_asr": 0.2217,
+      "rank": 3
+    },
+    "zoo": {
+      "label": "ZOO (zoo)",
+      "mean_asr": 0.0955,
+      "rank": 5
+    },
+    "transfer": {
+      "label": "Transfer (gray-box)",
+      "mean_asr": 0.1907,
+      "rank": 4
+    },
+    "saliency_grad": {
+      "label": "Saliency-Grad (white-box)",
+      "mean_asr": 0.0661,
+      "rank": 6
+    },
+    "saliency_ig": {
+      "label": "Saliency-IG (white-box)",
+      "mean_asr": 0.0161,
+      "rank": 7
+    },
+    "injection": {
+      "label": "Node Injection",
+      "mean_asr": 0.3413,
+      "rank": 2
+    },
+    "rewiring": {
+      "label": "Topology Rewiring",
+      "mean_asr": 0.374,
+      "rank": 1
+    }
+  },
+  "bootstrap_ci": {
+    "gatv2": {
+      "pgd": {
+        "lo": 0.2441,
+        "hi": 0.3662
+      },
+      "zoo": {
+        "lo": 0.0892,
+        "hi": 0.1784
+      },
+      "transfer": {
+        "lo": 0.1963,
+        "hi": 0.3
+      },
+      "saliency_grad": {
+        "lo": 0.061,
+        "hi": 0.1408
+      },
+      "saliency_ig": {
+        "lo": 0.0094,
+        "hi": 0.0563
+      },
+      "injection": {
+        "lo": 0.3521,
+        "hi": 0.4836
+      },
+      "rewiring": {
+        "lo": 0.4319,
+        "hi": 0.5634
+      }
+    },
+    "sage": {
+      "pgd": {
+        "lo": 0.2524,
+        "hi": 0.381
+      },
+      "zoo": {
+        "lo": 0.0762,
+        "hi": 0.1667
+      },
+      "transfer": {
+        "lo": 0.2074,
+        "hi": 0.3111
+      },
+      "saliency_grad": {
+        "lo": 0.0619,
+        "hi": 0.1429
+      },
+      "saliency_ig": {
+        "lo": 0.0048,
+        "hi": 0.0381
+      },
+      "injection": {
+        "lo": 0.3286,
+        "hi": 0.4619
+      },
+      "rewiring": {
+        "lo": 0.3429,
+        "hi": 0.4762
+      }
+    },
+    "sage_edge": {
+      "pgd": {
+        "lo": 0.0788,
+        "hi": 0.1577
+      },
+      "zoo": {
+        "lo": 0.0332,
+        "hi": 0.0954
+      },
+      "transfer": {
+        "lo": 0.1,
+        "hi": 0.1852
+      },
+      "saliency_grad": {
+        "lo": 0.0124,
+        "hi": 0.0581
+      },
+      "saliency_ig": {
+        "lo": 0.0,
+        "hi": 0.0207
+      },
+      "injection": {
+        "lo": 0.2656,
+        "hi": 0.3817
+      },
+      "rewiring": {
+        "lo": 0.2531,
+        "hi": 0.3693
+      }
+    },
+    "gin": {
+      "pgd": {
+        "lo": 0.1061,
+        "hi": 0.1959
+      },
+      "zoo": {
+        "lo": 0.0408,
+        "hi": 0.102
+      },
+      "transfer": {
+        "lo": 0.0778,
+        "hi": 0.1556
+      },
+      "saliency_grad": {
+        "lo": 0.0122,
+        "hi": 0.0571
+      },
+      "saliency_ig": {
+        "lo": 0.0,
+        "hi": 0.0122
+      },
+      "injection": {
+        "lo": 0.1755,
+        "hi": 0.2816
+      },
+      "rewiring": {
+        "lo": 0.2204,
+        "hi": 0.3347
+      }
+    }
+  },
+  "robustness_ranking_most_to_least_robust": [
+    "GIN",
+    "SAGE+Edge",
+    "SAGE",
+    "GATv2"
+  ],
+  "transfer_adjusted_asr": {
+    "0.05": {
+      "gatv2": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 210,
+        "n_not_tp_target": 60,
+        "n_evaded_total": 64,
+        "n_evaded_on_tp_target": 4,
+        "n_vacuous_evasions": 60,
+        "raw_asr": 0.237037,
+        "adjusted_asr": 0.019048,
+        "asr_difference_pp": 21.8,
+        "mean_conf_real_evasions": 0.615816,
+        "mean_conf_vacuous_evasions": 0.096835
+      },
+      "sage": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 207,
+        "n_not_tp_target": 63,
+        "n_evaded_total": 65,
+        "n_evaded_on_tp_target": 2,
+        "n_vacuous_evasions": 63,
+        "raw_asr": 0.240741,
+        "adjusted_asr": 0.009662,
+        "asr_difference_pp": 23.11,
+        "mean_conf_real_evasions": 0.614701,
+        "mean_conf_vacuous_evasions": 0.106723
+      },
+      "sage_edge": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 239,
+        "n_not_tp_target": 31,
+        "n_evaded_total": 35,
+        "n_evaded_on_tp_target": 4,
+        "n_vacuous_evasions": 31,
+        "raw_asr": 0.12963,
+        "adjusted_asr": 0.016736,
+        "asr_difference_pp": 11.29,
+        "mean_conf_real_evasions": 0.619379,
+        "mean_conf_vacuous_evasions": 0.160057
+      },
+      "gin": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 242,
+        "n_not_tp_target": 28,
+        "n_evaded_total": 30,
+        "n_evaded_on_tp_target": 2,
+        "n_vacuous_evasions": 28,
+        "raw_asr": 0.111111,
+        "adjusted_asr": 0.008264,
+        "asr_difference_pp": 10.28,
+        "mean_conf_real_evasions": 0.847614,
+        "mean_conf_vacuous_evasions": 0.124034
+      }
+    },
+    "0.1": {
+      "gatv2": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 210,
+        "n_not_tp_target": 60,
+        "n_evaded_total": 67,
+        "n_evaded_on_tp_target": 8,
+        "n_vacuous_evasions": 59,
+        "raw_asr": 0.248148,
+        "adjusted_asr": 0.038095,
+        "asr_difference_pp": 21.01,
+        "mean_conf_real_evasions": 0.668804,
+        "mean_conf_vacuous_evasions": 0.095356
+      },
+      "sage": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 207,
+        "n_not_tp_target": 63,
+        "n_evaded_total": 70,
+        "n_evaded_on_tp_target": 7,
+        "n_vacuous_evasions": 63,
+        "raw_asr": 0.259259,
+        "adjusted_asr": 0.033816,
+        "asr_difference_pp": 22.54,
+        "mean_conf_real_evasions": 0.717189,
+        "mean_conf_vacuous_evasions": 0.106723
+      },
+      "sage_edge": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 239,
+        "n_not_tp_target": 31,
+        "n_evaded_total": 38,
+        "n_evaded_on_tp_target": 7,
+        "n_vacuous_evasions": 31,
+        "raw_asr": 0.140741,
+        "adjusted_asr": 0.029289,
+        "asr_difference_pp": 11.15,
+        "mean_conf_real_evasions": 0.724339,
+        "mean_conf_vacuous_evasions": 0.160057
+      },
+      "gin": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 242,
+        "n_not_tp_target": 28,
+        "n_evaded_total": 31,
+        "n_evaded_on_tp_target": 4,
+        "n_vacuous_evasions": 27,
+        "raw_asr": 0.114815,
+        "adjusted_asr": 0.016529,
+        "asr_difference_pp": 9.83,
+        "mean_conf_real_evasions": 0.798356,
+        "mean_conf_vacuous_evasions": 0.113043
+      }
+    },
+    "0.2": {
+      "gatv2": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 210,
+        "n_not_tp_target": 60,
+        "n_evaded_total": 86,
+        "n_evaded_on_tp_target": 27,
+        "n_vacuous_evasions": 59,
+        "raw_asr": 0.318519,
+        "adjusted_asr": 0.128571,
+        "asr_difference_pp": 18.99,
+        "mean_conf_real_evasions": 0.830671,
+        "mean_conf_vacuous_evasions": 0.095356
+      },
+      "sage": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 207,
+        "n_not_tp_target": 63,
+        "n_evaded_total": 91,
+        "n_evaded_on_tp_target": 28,
+        "n_vacuous_evasions": 63,
+        "raw_asr": 0.337037,
+        "adjusted_asr": 0.135266,
+        "asr_difference_pp": 20.18,
+        "mean_conf_real_evasions": 0.859332,
+        "mean_conf_vacuous_evasions": 0.106723
+      },
+      "sage_edge": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 239,
+        "n_not_tp_target": 31,
+        "n_evaded_total": 51,
+        "n_evaded_on_tp_target": 20,
+        "n_vacuous_evasions": 31,
+        "raw_asr": 0.188889,
+        "adjusted_asr": 0.083682,
+        "asr_difference_pp": 10.52,
+        "mean_conf_real_evasions": 0.839688,
+        "mean_conf_vacuous_evasions": 0.160057
+      },
+      "gin": {
+        "n_gcn_tp": 270,
+        "n_tp_target_in_pool": 242,
+        "n_not_tp_target": 28,
+        "n_evaded_total": 45,
+        "n_evaded_on_tp_target": 18,
+        "n_vacuous_evasions": 27,
+        "raw_asr": 0.166667,
+        "adjusted_asr": 0.07438,
+        "asr_difference_pp": 9.23,
+        "mean_conf_real_evasions": 0.878694,
+        "mean_conf_vacuous_evasions": 0.113043
+      }
+    }
+  },
+  "cross_attack_overlap": {
+    "gatv2": {
+      "n_tp": 213,
+      "n_core_vulnerable": 6,
+      "core_vulnerable_pct": 2.82,
+      "n_any_evaded": 132,
+      "any_evaded_pct": 61.97,
+      "n_never_evaded": 81,
+      "never_evaded_pct": 38.03,
+      "unique_evasions_per_attack": {
+        "PGD": 4,
+        "ZOO": 0,
+        "Sal-Grad": 0,
+        "Sal-IG": 0,
+        "Node Inj.": 13,
+        "Topology": 24
+      },
+      "pairwise_jaccard": {
+        "PGD vs ZOO": {
+          "jaccard": 0.4308,
+          "intersection": 28,
+          "union": 65
+        },
+        "PGD vs Sal-Grad": {
+          "jaccard": 0.3231,
+          "intersection": 21,
+          "union": 65
+        },
+        "PGD vs Sal-IG": {
+          "jaccard": 0.1077,
+          "intersection": 7,
+          "union": 65
+        },
+        "PGD vs Node Inj.": {
+          "jaccard": 0.4259,
+          "intersection": 46,
+          "union": 108
+        },
+        "PGD vs Topology": {
+          "jaccard": 0.437,
+          "intersection": 52,
+          "union": 119
+        },
+        "ZOO vs Sal-Grad": {
+          "jaccard": 0.6897,
+          "intersection": 20,
+          "union": 29
+        },
+        "ZOO vs Sal-IG": {
+          "jaccard": 0.25,
+          "intersection": 7,
+          "union": 28
+        },
+        "ZOO vs Node Inj.": {
+          "jaccard": 0.2188,
+          "intersection": 21,
+          "union": 96
+        },
+        "ZOO vs Topology": {
+          "jaccard": 0.2294,
+          "intersection": 25,
+          "union": 109
+        },
+        "Sal-Grad vs Sal-IG": {
+          "jaccard": 0.3333,
+          "intersection": 7,
+          "union": 21
+        },
+        "Sal-Grad vs Node Inj.": {
+          "jaccard": 0.1579,
+          "intersection": 15,
+          "union": 95
+        },
+        "Sal-Grad vs Topology": {
+          "jaccard": 0.1651,
+          "intersection": 18,
+          "union": 109
+        },
+        "Sal-IG vs Node Inj.": {
+          "jaccard": 0.0787,
+          "intersection": 7,
+          "union": 89
+        },
+        "Sal-IG vs Topology": {
+          "jaccard": 0.0561,
+          "intersection": 6,
+          "union": 107
+        },
+        "Node Inj. vs Topology": {
+          "jaccard": 0.5354,
+          "intersection": 68,
+          "union": 127
+        }
+      }
+    },
+    "sage": {
+      "n_tp": 210,
+      "n_core_vulnerable": 3,
+      "core_vulnerable_pct": 1.43,
+      "n_any_evaded": 117,
+      "any_evaded_pct": 55.71,
+      "n_never_evaded": 93,
+      "never_evaded_pct": 44.29,
+      "unique_evasions_per_attack": {
+        "PGD": 6,
+        "ZOO": 0,
+        "Sal-Grad": 0,
+        "Sal-IG": 0,
+        "Node Inj.": 16,
+        "Topology": 15
+      },
+      "pairwise_jaccard": {
+        "PGD vs ZOO": {
+          "jaccard": 0.3788,
+          "intersection": 25,
+          "union": 66
+        },
+        "PGD vs Sal-Grad": {
+          "jaccard": 0.3182,
+          "intersection": 21,
+          "union": 66
+        },
+        "PGD vs Sal-IG": {
+          "jaccard": 0.0606,
+          "intersection": 4,
+          "union": 66
+        },
+        "PGD vs Node Inj.": {
+          "jaccard": 0.4608,
+          "intersection": 47,
+          "union": 102
+        },
+        "PGD vs Topology": {
+          "jaccard": 0.505,
+          "intersection": 51,
+          "union": 101
+        },
+        "ZOO vs Sal-Grad": {
+          "jaccard": 0.6429,
+          "intersection": 18,
+          "union": 28
+        },
+        "ZOO vs Sal-IG": {
+          "jaccard": 0.16,
+          "intersection": 4,
+          "union": 25
+        },
+        "ZOO vs Node Inj.": {
+          "jaccard": 0.2135,
+          "intersection": 19,
+          "union": 89
+        },
+        "ZOO vs Topology": {
+          "jaccard": 0.2333,
+          "intersection": 21,
+          "union": 90
+        },
+        "Sal-Grad vs Sal-IG": {
+          "jaccard": 0.1905,
+          "intersection": 4,
+          "union": 21
+        },
+        "Sal-Grad vs Node Inj.": {
+          "jaccard": 0.1685,
+          "intersection": 15,
+          "union": 89
+        },
+        "Sal-Grad vs Topology": {
+          "jaccard": 0.2022,
+          "intersection": 18,
+          "union": 89
+        },
+        "Sal-IG vs Node Inj.": {
+          "jaccard": 0.0482,
+          "intersection": 4,
+          "union": 83
+        },
+        "Sal-IG vs Topology": {
+          "jaccard": 0.0345,
+          "intersection": 3,
+          "union": 87
+        },
+        "Node Inj. vs Topology": {
+          "jaccard": 0.5225,
+          "intersection": 58,
+          "union": 111
+        }
+      }
+    },
+    "sage_edge": {
+      "n_tp": 241,
+      "n_core_vulnerable": 1,
+      "core_vulnerable_pct": 0.41,
+      "n_any_evaded": 101,
+      "any_evaded_pct": 41.91,
+      "n_never_evaded": 140,
+      "never_evaded_pct": 58.09,
+      "unique_evasions_per_attack": {
+        "PGD": 2,
+        "ZOO": 0,
+        "Sal-Grad": 0,
+        "Sal-IG": 0,
+        "Node Inj.": 18,
+        "Topology": 18
+      },
+      "pairwise_jaccard": {
+        "PGD vs ZOO": {
+          "jaccard": 0.5357,
+          "intersection": 15,
+          "union": 28
+        },
+        "PGD vs Sal-Grad": {
+          "jaccard": 0.2857,
+          "intersection": 8,
+          "union": 28
+        },
+        "PGD vs Sal-IG": {
+          "jaccard": 0.0714,
+          "intersection": 2,
+          "union": 28
+        },
+        "PGD vs Node Inj.": {
+          "jaccard": 0.2771,
+          "intersection": 23,
+          "union": 83
+        },
+        "PGD vs Topology": {
+          "jaccard": 0.241,
+          "intersection": 20,
+          "union": 83
+        },
+        "ZOO vs Sal-Grad": {
+          "jaccard": 0.5333,
+          "intersection": 8,
+          "union": 15
+        },
+        "ZOO vs Sal-IG": {
+          "jaccard": 0.1333,
+          "intersection": 2,
+          "union": 15
+        },
+        "ZOO vs Node Inj.": {
+          "jaccard": 0.1625,
+          "intersection": 13,
+          "union": 80
+        },
+        "ZOO vs Topology": {
+          "jaccard": 0.125,
+          "intersection": 10,
+          "union": 80
+        },
+        "Sal-Grad vs Sal-IG": {
+          "jaccard": 0.25,
+          "intersection": 2,
+          "union": 8
+        },
+        "Sal-Grad vs Node Inj.": {
+          "jaccard": 0.1026,
+          "intersection": 8,
+          "union": 78
+        },
+        "Sal-Grad vs Topology": {
+          "jaccard": 0.0641,
+          "intersection": 5,
+          "union": 78
+        },
+        "Sal-IG vs Node Inj.": {
+          "jaccard": 0.0256,
+          "intersection": 2,
+          "union": 78
+        },
+        "Sal-IG vs Topology": {
+          "jaccard": 0.0132,
+          "intersection": 1,
+          "union": 76
+        },
+        "Node Inj. vs Topology": {
+          "jaccard": 0.5612,
+          "intersection": 55,
+          "union": 98
+        }
+      }
+    },
+    "gin": {
+      "n_tp": 245,
+      "n_core_vulnerable": 0,
+      "core_vulnerable_pct": 0.0,
+      "n_any_evaded": 98,
+      "any_evaded_pct": 40.0,
+      "n_never_evaded": 147,
+      "never_evaded_pct": 60.0,
+      "unique_evasions_per_attack": {
+        "PGD": 3,
+        "ZOO": 0,
+        "Sal-Grad": 0,
+        "Sal-IG": 0,
+        "Node Inj.": 17,
+        "Topology": 28
+      },
+      "pairwise_jaccard": {
+        "PGD vs ZOO": {
+          "jaccard": 0.4595,
+          "intersection": 17,
+          "union": 37
+        },
+        "PGD vs Sal-Grad": {
+          "jaccard": 0.2162,
+          "intersection": 8,
+          "union": 37
+        },
+        "PGD vs Sal-IG": {
+          "jaccard": 0.027,
+          "intersection": 1,
+          "union": 37
+        },
+        "PGD vs Node Inj.": {
+          "jaccard": 0.3286,
+          "intersection": 23,
+          "union": 70
+        },
+        "PGD vs Topology": {
+          "jaccard": 0.2963,
+          "intersection": 24,
+          "union": 81
+        },
+        "ZOO vs Sal-Grad": {
+          "jaccard": 0.4706,
+          "intersection": 8,
+          "union": 17
+        },
+        "ZOO vs Sal-IG": {
+          "jaccard": 0.0588,
+          "intersection": 1,
+          "union": 17
+        },
+        "ZOO vs Node Inj.": {
+          "jaccard": 0.1967,
+          "intersection": 12,
+          "union": 61
+        },
+        "ZOO vs Topology": {
+          "jaccard": 0.1972,
+          "intersection": 14,
+          "union": 71
+        },
+        "Sal-Grad vs Sal-IG": {
+          "jaccard": 0.125,
+          "intersection": 1,
+          "union": 8
+        },
+        "Sal-Grad vs Node Inj.": {
+          "jaccard": 0.0847,
+          "intersection": 5,
+          "union": 59
+        },
+        "Sal-Grad vs Topology": {
+          "jaccard": 0.0857,
+          "intersection": 6,
+          "union": 70
+        },
+        "Sal-IG vs Node Inj.": {
+          "jaccard": 0.0179,
+          "intersection": 1,
+          "union": 56
+        },
+        "Sal-IG vs Topology": {
+          "jaccard": 0.0,
+          "intersection": 0,
+          "union": 69
+        },
+        "Node Inj. vs Topology": {
+          "jaccard": 0.3191,
+          "intersection": 30,
+          "union": 94
+        }
+      }
+    }
+  }
+}
