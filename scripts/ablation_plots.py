@@ -198,8 +198,8 @@ def plot_topology():
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
     fig.suptitle("Topology Rewiring Attack — Ablation over technique x k", fontsize=13, y=1.01)
 
-    tech_colors = {"peel_chain": "#e05c5c", "star": "#4a9eda", "parallel": "#5bbf72"}
-    tech_ls     = {"peel_chain": "-", "star": "--", "parallel": "-."}
+    tech_colors = {"chain_injection": "#e05c5c", "star": "#4a9eda", "parallel": "#5bbf72"}
+    tech_ls     = {"chain_injection": "-", "star": "--", "parallel": "-."}
 
     ax = axes[0]
     for tech in techniques:

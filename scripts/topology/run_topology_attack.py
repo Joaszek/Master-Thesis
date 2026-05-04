@@ -16,21 +16,21 @@ from scripts.utils import (
     infer, save_results,
 )
 from src.attacks.node_injection import LicitDistribution
-from src.attacks.topology_rewiring import TopologyAnalyzer, TopologyRewiringAttack
+from src.attacks.topology_rewiring import TopologyAnalyzer, TopologyAugmentationAttack
 from src.attacks.transfer_attack import get_clean_predictions, get_tp_indices
 
 
 TECHNIQUE_LABELS = {
-    "peel_chain": "Peel Chain",
-    "star":       "Star",
-    "parallel":   "Parallel",
+    "chain_injection": "Chain Injection",
+    "star":            "Star",
+    "parallel":        "Parallel",
 }
 
 
 def run_topology_for_combo(
     model,
     test_dataset,
-    attacker: TopologyRewiringAttack,
+    attacker: TopologyAugmentationAttack,
     tp_indices: np.ndarray,
     labels: np.ndarray,
     preds_clean: np.ndarray,
@@ -202,9 +202,9 @@ def _save_scatter_plot(results: dict, args, output_dir: str) -> None:
         return
 
     technique_colors = {
-        "peel_chain": "#2196F3",
-        "star":       "#FF9800",
-        "parallel":   "#4CAF50",
+        "chain_injection": "#2196F3",
+        "star":            "#FF9800",
+        "parallel":        "#4CAF50",
     }
     arch_markers = {
         "gatv2":     "o",
@@ -315,8 +315,8 @@ def main() -> None:
     parser.add_argument("--seed",            type=int,
                         default=twr_cfg.get("seed", 42))
     parser.add_argument("--techniques",      nargs="+",
-                        default=twr_cfg.get("techniques", ["peel_chain", "star", "parallel"]),
-                        choices=["peel_chain", "star", "parallel"])
+                        default=twr_cfg.get("techniques", ["chain_injection", "star", "parallel"]),
+                        choices=["chain_injection", "star", "parallel"])
     parser.add_argument("--k_intermediates", nargs="+", type=int,
                         default=twr_cfg.get("k_intermediates", [2, 5, 10]))
     parser.add_argument("--conv_types",      nargs="+",
@@ -396,7 +396,7 @@ def main() -> None:
                 )
                 t0 = time.time()
 
-                attacker = TopologyRewiringAttack(
+                attacker = TopologyAugmentationAttack(
                     licit_dist=licit_dist,
                     technique=technique,
                     k_intermediates=k,

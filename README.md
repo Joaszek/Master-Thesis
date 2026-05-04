@@ -78,18 +78,18 @@ Six attack paradigms cover the full threat model spectrum a deployed AML system 
 |---|---|---|---|
 | **PGD** | Feature perturbation | White-box (full gradient access) | SAGE+Edge max ASR 24.1%; GATv2 recall drops to 9.4% at ε=0.5 |
 | **Transfer** | Feature perturbation | Gray-box (surrogate GCN) | GCN surrogate achieves 20.8% avg ASR; SAGE+Edge hardest to fool (15.3%) |
-| **ZOO** | Feature perturbation | Black-box (query access only) | No model access — gradients estimated via finite differences; ASR grows with query budget (100→2000 queries) |
-| **Topology Rewiring** | Structure manipulation | Black-box (graph edit) | GATv2 most vulnerable (65.3% ASR at peel_chain_k10); peel_chain most effective technique overall; star adds only 1 hub node regardless of k — simulates centralized mixer / exchange hub pattern |
+| **ZOO** | Feature perturbation | Black-box (query access only) | ZOO-inspired: gradients estimated via finite differences on random feature subspace, sign-based update (departs from ADAM in original ZOO); ASR grows with query budget (100→2000 queries) |
+| **Topology Augmentation** | Structure manipulation | Black-box (graph edit) | GATv2 most vulnerable (65.3% ASR at chain_injection_k10); chain_injection most effective technique overall; star adds only 1 hub node regardless of k — simulates centralized mixer / exchange hub pattern |
 | **Node Injection** | Structure manipulation | Black-box (node insertion) | Random injection most effective across all models (up to 76.1% ASR on GATv2); mimicry (licit-looking nodes) least effective — model is not fooled by licit features alone |
 | **Saliency-guided** | Feature perturbation | White-box (guided by IG) | Integrated Gradients identifies top-K features; targeted perturbation vs. random baseline |
 
 **Robustness ranking (most → least robust):** SAGE+Edge > GIN > SAGE > GATv2
 
-### Topology Attacks as Bitcoin Obfuscation Simulation
+### Topology Augmentation Attacks as Bitcoin Obfuscation Simulation
 
 Topology rewiring attacks are direct simulations of real-world Bitcoin obfuscation techniques used by illicit actors to evade blockchain analytics:
 
-- `peel_chain` — **chain peeling**: sequential hop-based fund routing through intermediary addresses, fragmenting the transaction trail. Directly analogous to layering in AML typology.
+- `chain_injection` — **chain injection**: injects k intermediary nodes between the two endpoints of the diameter path, creating a longer alternative route. Simulates layering (hop-based fund routing) in AML typology. Because Bitcoin transactions are immutable, the original path is preserved — this is a purely additive structural perturbation, not a replacement of the original route.
 - `star` — **hub-based mixing**: one central node connected to many targets, simulating a **centralized mixer / exchange hub** (hub-and-spoke topology, analogous to Uniswap-style AMM or custodial tumbler). Adds only 1 hub node regardless of budget — lowest node footprint of all techniques.
 - `parallel` — **transaction splitting**: parallel paths between source and destination, analogous to smurfing / structuring.
 
@@ -131,7 +131,7 @@ src/
 ├── preprocess/     # Raw CSV → Parquet pipeline, k-hop subgraph expansion
 ├── models/         # GNN architectures, calibration, losses, surrogate GCN, risk scorer
 ├── train/          # Training loop, threshold optimization, plotting, samplers
-├── attacks/        # PGD, Transfer, ZOO, Topology Rewiring, Node Injection, Saliency
+├── attacks/        # PGD, Transfer, ZOO, Topology Augmentation, Node Injection, Saliency
 ├── analysis/       # Feature importance (Gradient Saliency, IG, Ablation)
 └── inference/      # Stable GNNInferenceOutput contract for downstream systems
 
@@ -177,7 +177,7 @@ Attack configuration (epsilons, steps, strategies) is controlled via `config.yam
 - **Best detection performance:** GIN (F1=0.957, ROC-AUC=0.982)
 - **Best for deployment:** SAGE+Edge — highest adversarial robustness (max ASR 24.1% under PGD ε=0.5), lowest variance across seeds (std=0.003)
 - **Most vulnerable:** GATv2 — attention mechanism amplifies perturbations (ASR 87.8% at ε=0.5, 65.3% under topology rewiring)
-- **Structural attacks dominate:** At comparable budgets, topology rewiring (simulating CoinJoin/peel chains) is more effective than feature perturbation — 41.3% vs 30.5% ASR on GATv2 (parallel_k5 vs PGD ε=0.1)
+- **Structural attacks dominate:** At comparable budgets, topology augmentation (simulating CoinJoin/chain layering) is more effective than feature perturbation — 41.3% vs 30.5% ASR on GATv2 (parallel_k5 vs PGD ε=0.1)
 - **Edge features as natural defense:** SAGE+Edge's transaction-level edge aggregation limits attack surface — feature attacks cannot perturb edge attributes
 
 ## Stack

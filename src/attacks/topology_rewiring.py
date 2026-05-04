@@ -104,9 +104,9 @@ class TopologyAnalyzer:
         }
 
 
-class TopologyRewiringAttack:
+class TopologyAugmentationAttack:
 
-    TECHNIQUES = ("peel_chain", "star", "parallel")
+    TECHNIQUES = ("chain_injection", "star", "parallel")
 
     def __init__(
         self,
@@ -128,15 +128,15 @@ class TopologyRewiringAttack:
 
     def attack(self, data) -> Data:
 
-        if self.technique == "peel_chain":
-            return self._peel_chain(data)
+        if self.technique == "chain_injection":
+            return self._chain_injection(data)
         elif self.technique == "star":
             return self._star_injection(data)
         else:
             return self._parallel_paths(data)
 
 
-    def _peel_chain(self, data) -> Data:
+    def _chain_injection(self, data) -> Data:
         G    = _pyg_to_nx(data)
         path = _diameter_path(G)
 

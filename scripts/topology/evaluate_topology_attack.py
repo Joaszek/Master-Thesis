@@ -35,16 +35,16 @@ MODEL_MARKERS = {
 }
 
 TECHNIQUE_COLORS = {
-    "peel_chain": "#1976D2",
-    "star":       "#F57C00",
-    "parallel":   "#388E3C",
+    "chain_injection": "#1976D2",
+    "star":            "#F57C00",
+    "parallel":        "#388E3C",
 }
 TECHNIQUE_LABELS = {
-    "peel_chain": "Peel Chain",
-    "star":       "Star (hub)",
-    "parallel":   "Parallel",
+    "chain_injection": "Chain Injection",
+    "star":            "Star (hub)",
+    "parallel":        "Parallel",
 }
-TECHNIQUE_ORDER = ["peel_chain", "star", "parallel"]
+TECHNIQUE_ORDER = ["chain_injection", "star", "parallel"]
 
 
 def setup_style() -> None:

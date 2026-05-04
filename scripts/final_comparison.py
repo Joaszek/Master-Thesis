@@ -97,7 +97,7 @@ print("All result files loaded.")
 
 CANON_EPS   = "0.1"
 CANON_INJ   = "random_k3_c1"
-CANON_TOPO  = "peel_chain_k5"
+CANON_TOPO  = "chain_injection_k5"
 CANON_SAL_K = "5"
 
 def get_pgd(model, eps=CANON_EPS):
@@ -769,7 +769,7 @@ def asr_vs_budget():
     inj_k_vals  = [1, 3, 5, 10]
 
     for m in MODEL_KEYS:
-        asrs = [topo_raw["models"][m]["combinations"][f"peel_chain_k{k}"]["asr"]
+        asrs = [topo_raw["models"][m]["combinations"][f"chain_injection_k{k}"]["asr"]
                 for k in topo_k_vals]
         ax2.plot(topo_k_vals, [a * 100 for a in asrs],
                  color=MODEL_COLORS[m],

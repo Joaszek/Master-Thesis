@@ -97,8 +97,8 @@ node_injection_attack:
 
 topology_rewiring_attack:
   seed: 42
-  techniques: [peel_chain, star, parallel]
-  k_intermediates: [2, 5, 10]       # peel_chain: chain length | star: hub degree | parallel: n paths
+  techniques: [chain_injection, star, parallel]
+  k_intermediates: [2, 5, 10]       # chain_injection: chain length | star: hub degree | parallel: n paths
   conv_types: [gatv2, sage, sage_edge, gin]
   output: "data/results/topology_rewiring_results.json"
 
