@@ -142,11 +142,12 @@ def plot_injection():
     c_values   = data["connections_per_node"]
     strategies = data["strategies"]
 
-    fig, axes = plt.subplots(1, 3, figsize=(14, 4.5), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
     fig.suptitle("Node Injection Attack — Ablation over k_nodes x connections_per_node",
                  fontsize=13, y=1.01)
 
     linestyles = {1: "-", 2: "--", 3: ":"}
+    c_colors   = {1: "#e05c5c", 2: "#4a9eda", 3: "#5bbf72"}
 
     for ax, strategy in zip(axes, strategies):
         for c in c_values:
@@ -156,7 +157,7 @@ def plot_injection():
                 vals = [data["models"][m]["combinations"].get(key, {}).get("asr") or 0
                         for m in MODELS]
                 asrs.append(np.mean(vals) * 100)
-            ax.plot(k_values, asrs, color="#555", linestyle=linestyles[c],
+            ax.plot(k_values, asrs, color=c_colors[c], linestyle=linestyles[c],
                     marker="o", markersize=5, linewidth=1.6,
                     label=f"conn={c}")
         style_ax(ax, ylabel="avg ASR (%) over models", xlabel="k_nodes",

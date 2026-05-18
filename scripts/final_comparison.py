@@ -791,7 +791,7 @@ def asr_vs_budget():
     ]
     style_handles = [
         plt.Line2D([0], [0], linestyle="-", marker="o", color="grey",
-                   label="Topology Rewiring (peel-chain)"),
+                   label="Topology Rewiring (chain-injection)"),
         plt.Line2D([0], [0], linestyle=":", marker="^", color="grey",
                    label="Node Injection (random, c=1)"),
     ]
