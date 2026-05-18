@@ -5,7 +5,7 @@
     "feature_attacks_epsilon": "0.1",
     "saliency_top_k": "5",
     "injection_combo": "random_k3_c1",
-    "topology_combo": "peel_chain_k5"
+    "topology_combo": "chain_injection_k5"
   },
   "statistical_test": {
     "primary": {
