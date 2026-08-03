@@ -37,7 +37,7 @@ SKIP_BUILD=0
 SKIP_DEPS=0
 DEPS_ONLY=0
 K_HOPS=(0 1)
-PYTHON="${PYTHON:-python}"
+PYTHON="${PYTHON:-}"
 
 # Wheel coordinates — must match requirements.txt. Override via env if the cloud image
 # ships a different CUDA build.
@@ -76,17 +76,34 @@ done
 
 [[ $SKIP_DEPS -eq 1 && $DEPS_ONLY -eq 1 ]] && fail "--deps-only and --skip-deps are mutually exclusive."
 
+# Many images ship python3 without a bare `python`; prefer an active virtualenv if there is one.
+if [[ -z "$PYTHON" ]]; then
+    for cand in "${VIRTUAL_ENV:+${VIRTUAL_ENV}/bin/python}" python3 python; do
+        [[ -n "$cand" ]] && command -v "$cand" >/dev/null 2>&1 && { PYTHON="$cand"; break; }
+    done
+fi
+[[ -n "$PYTHON" ]] || fail "No python interpreter found (tried python3, python). Set PYTHON=/path/to/python."
+
 # ─── 1. Python environment ────────────────────────────────────────────────────
 if [[ $SKIP_DEPS -eq 0 ]]; then
     head_ "1/4  Python environment"
 
-    command -v "$PYTHON" >/dev/null 2>&1 || fail "python not found: ${PYTHON} (set PYTHON=/path/to/python)"
     info "python $("$PYTHON" -c 'import sys; print(sys.version.split()[0])') at $("$PYTHON" -c 'import sys; print(sys.executable)')"
     "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' \
         || fail "Python 3.10+ required."
 
     "$PYTHON" -m pip --version >/dev/null 2>&1 || fail "pip not available for ${PYTHON}"
-    "$PYTHON" -m pip install --quiet --upgrade pip
+
+    # Debian/Ubuntu images mark the system interpreter as externally managed (PEP 668),
+    # which blocks pip outright. Inside a throwaway cloud box that guard is just noise.
+    PIP_FLAGS=()
+    if [[ -z "${VIRTUAL_ENV:-}" ]] && "$PYTHON" -c 'import os, sys, sysconfig; sys.exit(0 if os.path.exists(os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")) else 1)'; then
+        warn "Externally managed environment (PEP 668) — passing --break-system-packages"
+        PIP_FLAGS+=(--break-system-packages)
+    fi
+    pip_install() { "$PYTHON" -m pip install ${PIP_FLAGS[@]+"${PIP_FLAGS[@]}"} "$@"; }
+
+    pip_install --quiet --upgrade pip
 
     # Cloud GPU images often preinstall torch. Reusing whatever is there beats forcing a
     # reinstall that can break the driver/CUDA pairing — but torch_scatter must be built
@@ -104,7 +121,7 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
         esac
     else
         info "Installing torch ${TORCH_VERSION} (${CUDA_TAG})"
-        "$PYTHON" -m pip install "torch==${TORCH_VERSION}" \
+        pip_install "torch==${TORCH_VERSION}" \
             --index-url "https://download.pytorch.org/whl/${CUDA_TAG}" \
             || fail "torch installation failed."
         ok "torch ${TORCH_VERSION}+${CUDA_TAG}"
@@ -117,13 +134,13 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
     else
         pyg_index="https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_TAG}.html"
         info "Installing torch_scatter ${SCATTER_VERSION} from ${pyg_index}"
-        "$PYTHON" -m pip install "torch_scatter==${SCATTER_VERSION}" -f "$pyg_index" \
+        pip_install "torch_scatter==${SCATTER_VERSION}" -f "$pyg_index" \
             || fail "torch_scatter installation failed. Check that ${pyg_index} has a wheel for your torch/python combination."
         ok "torch_scatter ${SCATTER_VERSION}"
     fi
 
     info "Installing remaining requirements"
-    "$PYTHON" -m pip install -r requirements.txt || fail "requirements.txt installation failed."
+    pip_install -r requirements.txt || fail "requirements.txt installation failed."
 
     head_ "Environment check"
     "$PYTHON" - <<'PY' || fail "Environment verification failed."
