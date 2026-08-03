@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+import argparse
 import polars as pl
 from collections import defaultdict
 
@@ -9,11 +10,35 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from preprocess.utils import load_config, resolve_path, atomic_write_parquet, atomic_write_json, khop_expand
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Preprocess Elliptic2 into k-hop subgraphs")
+    parser.add_argument("--k-hop", type=int, default=None,
+                        help="k-hop expansion depth (default: data.k_hop from config.yaml)")
+    parser.add_argument("--raw-dir", default=None,
+                        help="Directory holding the five Elliptic2 CSVs (default: data.raw_dir)")
+    parser.add_argument("--processed-dir", default=None,
+                        help="Output directory (default: data.processed_dir)")
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+
     config = load_config()
     raw_dir, out_dir = resolve_path(config)
     col_cfg = config["data"]["columns"]
     k_hop = config["data"].get("k_hop", 0)
+
+    if args.raw_dir is not None:
+        raw_dir = args.raw_dir
+    if args.k_hop is not None:
+        k_hop = args.k_hop
+    if args.processed_dir is not None:
+        out_dir = args.processed_dir
+    elif args.k_hop is not None:
+        out_dir = f"data/processed_k_hop_{k_hop}"
+    print(f"  raw_dir={raw_dir} | processed_dir={out_dir} | k_hop={k_hop}")
+
     os.makedirs(out_dir, exist_ok=True)
 
     total_start = time.time()
@@ -80,12 +105,15 @@ def main():
         )
 
         if expansion_nodes:
-            exp_nodes_df = pl.DataFrame({
-                "node_id": [n[0] for n in expansion_nodes],
-                "subgraph_id": [n[1] for n in expansion_nodes],
-                "is_original": [False] * len(expansion_nodes),
-                "hop": [n[2] for n in expansion_nodes],
-            }).unique(subset=["node_id", "subgraph_id"])
+            exp_nodes_df = pl.DataFrame(
+                {
+                    "node_id": [n[0] for n in expansion_nodes],
+                    "subgraph_id": [n[1] for n in expansion_nodes],
+                    "is_original": [False] * len(expansion_nodes),
+                    "hop": [n[2] for n in expansion_nodes],
+                },
+                schema_overrides={"hop": pl.Int32},
+            ).unique(subset=["node_id", "subgraph_id"])
             nodes_df = pl.concat([nodes_df, exp_nodes_df])
             print(f"\n  Expanded nodes: {original_num_nodes:,} -> {len(nodes_df):,} (+{len(nodes_df) - original_num_nodes:,})")
 
@@ -173,6 +201,17 @@ def main():
                 if os.path.exists(p):
                     os.remove(p)
                     print(f"    removed {p}")
+
+    if os.path.exists(nodes_parquet_path):
+        _check = pl.read_parquet(nodes_parquet_path, n_rows=1)
+        missing = [c for c in ("is_original", "hop") if c not in _check.columns]
+        if missing:
+            print(f"  Old nodes.parquet without {', '.join(missing)} — removing, rewriting")
+            os.remove(nodes_parquet_path)
+            graphs_cache = f"{out_dir}/all_graphs.pt"
+            if os.path.exists(graphs_cache):
+                os.remove(graphs_cache)
+                print(f"    removed {graphs_cache}")
 
     if not os.path.exists(nodes_parquet_path):
         print("\n  Writing nodes.parquet")

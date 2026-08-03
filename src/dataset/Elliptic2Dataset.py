@@ -36,6 +36,13 @@ class Elliptic2Dataset(Dataset):
     def get_labels(self):
         return [d.y.item() for d in self.data_list]
 
+    def nodes_have_is_original(self):
+        """Whether nodes.parquet carries the is_original column (absent in pre-k-hop builds)."""
+        nodes_path = os.path.join(self.processed_dir, "nodes.parquet")
+        if not os.path.exists(nodes_path):
+            return None
+        return "is_original" in pl.read_parquet(nodes_path, n_rows=1).columns
+
     def get_all_data(self):
         if self.processed_dir in Elliptic2Dataset._cache:
             return Elliptic2Dataset._cache[self.processed_dir]
@@ -48,13 +55,24 @@ class Elliptic2Dataset(Dataset):
         if cache_valid and os.path.exists(summary_path):
             with open(summary_path) as f:
                 summary = json.load(f)
-            current_k_hop = summary.get("k_hop", 0)
-            cached_k_hop = None
+            cached_meta = {}
             if os.path.exists(cache_meta_path):
                 with open(cache_meta_path) as f:
-                    cached_k_hop = json.load(f).get("k_hop", None)
-            if cached_k_hop is not None and cached_k_hop != current_k_hop:
-                print(f"  Cache stale: k_hop changed ({cached_k_hop} -> {current_k_hop}), rebuilding...")
+                    cached_meta = json.load(f)
+
+            stale_reason = None
+            cached_k_hop = cached_meta.get("k_hop", None)
+            if cached_k_hop is not None and cached_k_hop != summary.get("k_hop", 0):
+                stale_reason = f"k_hop changed ({cached_k_hop} -> {summary.get('k_hop', 0)})"
+                
+            if stale_reason is None:
+                cached_flag = cached_meta.get("has_is_original", None)
+                current_flag = self.nodes_have_is_original()
+                if cached_flag is not None and cached_flag != current_flag:
+                    stale_reason = f"nodes.parquet is_original changed ({cached_flag} -> {current_flag})"
+
+            if stale_reason is not None:
+                print(f"  Cache stale: {stale_reason}, rebuilding...")
                 os.remove(cache_path)
                 cache_valid = False
 
@@ -74,7 +92,10 @@ class Elliptic2Dataset(Dataset):
             with open(summary_path) as f:
                 summary = json.load(f)
             with open(cache_meta_path, "w") as f:
-                json.dump({"k_hop": summary.get("k_hop", 0)}, f)
+                json.dump({
+                    "k_hop": summary.get("k_hop", 0),
+                    "has_is_original": self.nodes_have_is_original(),
+                }, f)
 
         Elliptic2Dataset._cache[self.processed_dir] = data_list
         return data_list
