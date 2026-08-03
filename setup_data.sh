@@ -92,7 +92,31 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
     "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' \
         || fail "Python 3.10+ required."
 
-    "$PYTHON" -m pip --version >/dev/null 2>&1 || fail "pip not available for ${PYTHON}"
+    # Minimal Ubuntu/Debian images ship python3 without pip, and strip ensurepip out of
+    # python3-minimal into the python3-venv package — so try all three routes.
+    if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
+        warn "pip not available for ${PYTHON} — bootstrapping"
+        if "$PYTHON" -m ensurepip --upgrade --default-pip >/dev/null 2>&1; then
+            ok "pip bootstrapped via ensurepip"
+        elif command -v apt-get >/dev/null 2>&1 && [[ "$(id -u)" -eq 0 ]]; then
+            info "Installing python3-pip via apt"
+            DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+                || fail "apt-get update failed."
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-pip \
+                || fail "apt-get install python3-pip failed."
+            ok "pip bootstrapped via apt"
+        else
+            info "Falling back to get-pip.py"
+            curl -sSL --max-time 120 https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+                || fail "Could not download get-pip.py. Install pip manually: apt-get install -y python3-pip"
+            "$PYTHON" /tmp/get-pip.py \
+                || fail "get-pip.py failed. Install pip manually: apt-get install -y python3-pip"
+            ok "pip bootstrapped via get-pip.py"
+        fi
+        "$PYTHON" -m pip --version >/dev/null 2>&1 \
+            || fail "pip still unavailable after bootstrap."
+    fi
+    info "pip $("$PYTHON" -m pip --version | awk '{print $2}')"
 
     # Debian/Ubuntu images mark the system interpreter as externally managed (PEP 668),
     # which blocks pip outright. Inside a throwaway cloud box that guard is just noise.
