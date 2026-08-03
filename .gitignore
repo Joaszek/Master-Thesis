@@ -1,5 +1,6 @@
 .idea
 checkpoints
+data/raw
 data/processed_k_hop_0
 data/processed_k_hop_1
 dataset
