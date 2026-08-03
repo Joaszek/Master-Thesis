@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# setup_data.sh — bootstrap the environment and build the Elliptic2 processed caches.
+# setup_data.sh — fetch the Elliptic2 dataset and build the processed subgraph caches.
 #
-# Installs PyTorch + PyG + torch_scatter (which need custom wheel indexes and cannot come
-# from a plain `pip install -r requirements.txt`), then fetches the dataset and builds the
-# k-hop subgraph caches.
+# By default this installs only what preprocessing actually imports (polars, pyyaml, plus
+# kagglehub for the download) — no torch, no CUDA, and Python 3.10 is enough. That is all a
+# box needs if it only builds the data and training happens elsewhere.
+#
+# --deps-full additionally installs PyTorch + PyG + torch_scatter for training on the same
+# machine; those need custom wheel indexes and Python 3.11+, and cannot come from a plain
+# `pip install -r requirements.txt`.
 #
 # The dataset ships five CSVs totalling ~88 GB, dominated by background_edges.csv (~83 GB).
 # k-hop expansion streams that file with polars scan_csv, so RAM stays modest, but the
@@ -13,8 +17,9 @@
 # and data/processed_k_hop_* is symlinked back into the repo so config.yaml needs no edits.
 #
 # Usage:
-#   bash setup_data.sh                          # deps + download + build k_hop 0 and 1
-#   bash setup_data.sh --deps-only              # just install the python environment
+#   bash setup_data.sh                          # download + build k_hop 0 and 1
+#   bash setup_data.sh --deps-full              # also install the training stack (torch, PyG)
+#   bash setup_data.sh --deps-only              # just install dependencies, no data
 #   bash setup_data.sh --skip-deps              # assume the environment is ready
 #   bash setup_data.sh --base-dir /mnt/scratch  # different scratch disk
 #   bash setup_data.sh --from /path/to/csvs     # reuse CSVs you already have
@@ -36,6 +41,7 @@ FROM_DIR=""
 SKIP_BUILD=0
 SKIP_DEPS=0
 DEPS_ONLY=0
+DEPS_MODE="minimal"   # "minimal" = polars + yaml + kagglehub; "full" = + torch/PyG stack
 K_HOPS=(0 1)
 PYTHON="${PYTHON:-}"
 
@@ -68,6 +74,7 @@ while [[ $# -gt 0 ]]; do
         --skip-build) SKIP_BUILD=1; shift ;;
         --skip-deps)  SKIP_DEPS=1; shift ;;
         --deps-only)  DEPS_ONLY=1; shift ;;
+        --deps-full)  DEPS_MODE="full"; shift ;;
         --k-hop)      K_HOPS=("$2"); shift 2 ;;
         -h|--help)    sed -n '2,25p' "$0"; exit 0 ;;
         *)            fail "Unknown argument: $1" ;;
@@ -89,8 +96,28 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
     head_ "1/4  Python environment"
 
     info "python $("$PYTHON" -c 'import sys; print(sys.version.split()[0])') at $("$PYTHON" -c 'import sys; print(sys.executable)')"
-    "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' \
-        || fail "Python 3.10+ required."
+
+    # Building the dataset only needs polars + pyyaml (see src/preprocess/), all of which
+    # run on 3.10 — the 3.11 floor comes from the training stack (contourpy, numpy, pandas),
+    # which is irrelevant on a box that only preprocesses.
+    min_python=10
+    [[ "$DEPS_MODE" == "full" ]] && min_python=11
+    python_ok() { "$1" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, ${min_python}) else 1)" 2>/dev/null; }
+
+    if ! python_ok "$PYTHON"; then
+        current_py="$("$PYTHON" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+        warn "Python ${current_py} is too old — need 3.${min_python}+"
+
+        for cand in python3.11 python3.12; do
+            if command -v "$cand" >/dev/null 2>&1 && python_ok "$cand"; then
+                PYTHON="$cand"
+                ok "Switching to ${cand}"
+                break
+            fi
+        done
+        python_ok "$PYTHON" \
+            || fail "Python 3.${min_python}+ required. Install it, or re-run with PYTHON=/path/to/python3.11"
+    fi
 
     # Minimal Ubuntu/Debian images ship python3 without pip, and strip ensurepip out of
     # python3-minimal into the python3-venv package — so try all three routes.
@@ -128,6 +155,39 @@ if [[ $SKIP_DEPS -eq 0 ]]; then
     pip_install() { "$PYTHON" -m pip install ${PIP_FLAGS[@]+"${PIP_FLAGS[@]}"} "$@"; }
 
     pip_install --quiet --upgrade pip
+
+    if [[ "$DEPS_MODE" == "minimal" ]]; then
+        # Preprocessing imports only polars and yaml; kagglehub is for the download.
+        # Take the pins straight from requirements.txt so the two cannot drift apart.
+        minimal_pins=()
+        for pkg in polars PyYAML kagglehub; do
+            pin="$(grep -iE "^${pkg}==" requirements.txt | head -1 || true)"
+            minimal_pins+=("${pin:-$pkg}")
+        done
+        info "Installing preprocessing dependencies: ${minimal_pins[*]}"
+        pip_install "${minimal_pins[@]}" || fail "Dependency installation failed."
+        ok "Preprocessing dependencies installed"
+
+        head_ "Environment check"
+        "$PYTHON" - <<'PY' || fail "Environment verification failed."
+import importlib, sys
+missing = []
+for m in ["polars", "yaml", "kagglehub"]:
+    try:
+        mod = importlib.import_module(m)
+        print(f"    {m:<16} {getattr(mod, '__version__', 'n/a')}")
+    except Exception as e:
+        missing.append(f"{m} ({e})")
+if missing:
+    sys.exit("    MISSING: " + ", ".join(missing))
+PY
+        ok "Environment ready (preprocessing only — pass --deps-full for the training stack)"
+
+        if [[ $DEPS_ONLY -eq 1 ]]; then
+            echo; info "--deps-only: stopping before data setup."
+            exit 0
+        fi
+    else
 
     # Cloud GPU images often preinstall torch. Reusing whatever is there beats forcing a
     # reinstall that can break the driver/CUDA pairing — but torch_scatter must be built
@@ -189,9 +249,10 @@ else:
 PY
     ok "Environment ready"
 
-    if [[ $DEPS_ONLY -eq 1 ]]; then
-        echo; info "--deps-only: stopping before data setup."
-        exit 0
+        if [[ $DEPS_ONLY -eq 1 ]]; then
+            echo; info "--deps-only: stopping before data setup."
+            exit 0
+        fi
     fi
 else
     head_ "1/4  Python environment — skipped (--skip-deps)"
@@ -350,9 +411,21 @@ cat <<EOF
 
   Processed data:  ${BASE_DIR}/processed_k_hop_*
   Repo symlinks:   data/processed_k_hop_*  (config.yaml works unchanged)
+EOF
+
+if [[ "$DEPS_MODE" == "minimal" ]]; then
+    cat <<EOF
+
+  This box has preprocessing dependencies only. Copy the processed data to wherever
+  training runs, or re-run with --deps-full to install the training stack here.
+
+EOF
+else
+    cat <<EOF
 
   Next:
     ${PYTHON} -m src.train.train          # train all four architectures, 3 seeds
     bash run_all_attacks.sh               # full adversarial evaluation
 
 EOF
+fi
